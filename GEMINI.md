@@ -7,6 +7,7 @@ Your workspace is restricted to this folder: `C:\Users\monte\OneDrive - Universi
 2. **Safety:** Always show a `diff` before modifying any `.m` files.
 3. **Execution:** Use the `run_shell_command` tool to execute MATLAB scripts.
 4. **Code Standard** When modifying existing scripts try to maintain the structure of the code (i.e. if there's a functions block at the bottom of the document don't continue that format). When modifying functions make every effort to preserve previous comments / line spacing.
+5. **Verification** When editing matlab scripts run them before hand to verify expected output and that no errors have occured. If an error occurs correct it.
 
 # Tool Instructions
 - **To Run a Script:** Use `matlab -batch "run('filename.m')"`
