@@ -1,7 +1,7 @@
 clear; clc
 %% CONFIGURATION PARAMETERS (EDIT HERE)
 % Pareto Optimization Weights [Total Mass, Power, Mass Ratio, Freq Diff from 50Hz]
-pareto_weights = [1.0, 0.5, 0.2, 0.2]; 
+pareto_weights = [1.0, 0.5, 1.0, 0.2]; 
 
 % Simulation safety limits
 xcr_cap_frac = 0.15; % reject if any single xcr > 15% of h_layer
@@ -351,4 +351,21 @@ function xcr = chen_residual_deformation(F0, omega, ks, ksu, Pb, m_roller, m_spr
     term3 = Pb/ks - Pb/ksu;
     xcr = term1 * term2 + term3;
     xcr = max(0, xcr);
+end
+
+function [rp_eff,A_contact,lc] = rp_fun(r,b,h)
+    %Input:
+    % r = roller radius
+    % b = roller width
+    % h = depth of compactor pass (how far into the soil are you pressng the thing?
+    %Output:
+    %rp_eff = effective radius ofa a circular puck with same area (chen did it this way but we're rolling so I needed to find equivilants.)
+    %A_contact = contact patch
+    %lc = arc length for contact area
+    
+    theta = acos((r-h)/r); %half angle
+    lc = 2*theta*r; %full arc length of contact patch
+    A_contact = b * lc;               % m^2, contact area
+    % pi*r_eff^2 = b*lc => r_eff = sqrt(a_contact/pi)
+    rp_eff = sqrt(A_contact/pi); %equivilant circular radius interfacing with chen et al
 end
