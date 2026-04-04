@@ -36,9 +36,7 @@ nu = 0.35; %LHS poisson ratio, technically changes with density but not by much 
 f = 30; % Hz
 omega = 2*pi*f; % rad/s
 
-me = 0.2; % kg, eccentric mass (guess)
-re = 0.05; % m, eccentric radius (guess)
-
+m0e = 0.01;
 % Simulation settings
 N_cycles    = 1e5;     % max vibration cycles to simulate
 t_cycle     = 1/f;     % s, period of one vibration cycle
@@ -59,7 +57,7 @@ ks_fun = @(rho,rp) 2*rp * E(rho) / (1-nu);
 ksu_fun = @(rho,rp) 2*rp * E_su(rho) / (1-nu);
 
 % EXCITATION FORCE
-F0    = me * re * omega^2; % N, vibratory force amplitude
+F0    = m0e * omega^2; % N, vibratory force amplitude
 F_peak = W_roller + F0;    % N, static + dynamic peak load (used only in logic, optional)
 
 %% MAIN ELASTO-PLASTIC COMPACTION LOOP
@@ -196,4 +194,23 @@ function [rp_eff,A_contact,lc] = rp_fun(r,b,h)
     A_contact = b * lc;               % m^2, contact area
     % pi*r_eff^2 = b*lc => r_eff = sqrt(a_contact/pi)
     rp_eff = sqrt(A_contact/pi); %equivilant circular radius interfacing with chen et al
+end
+
+function [z0] = bekker_sinkage(F_lift,R_radius,b_width,i_skid,SOIL)
+    %Input:
+    % F_lift [N] Normal force reacting to rover mass (how hard your pushing the roller into the soil)
+    % R_radius [m]: Wheel/roller radius
+    % b_width [m]: Wheel/roller width
+    % i_skid: i=0 is no skid; i->+inf is a fully locked wheel.
+    %Output:
+    % z0 depth in m of sinkage
+
+    %This is an anon function that can be solved with fzero since it is not nice
+    Bekker = @(z0) ((b_width*SOIL.k*z0^SOIL.n)*sqrt(2*R_radius*z0 - z0^2)*(1+i_skid)^SOIL.n)/(SOIL.n+1) - F_lift; %Bekker et al (eq21)
+    %numerical solving for z0
+    try
+        z0 = fzero(Bekker,[0,R_radius]);
+    catch
+        z0 = R_radius;
+    end
 end
