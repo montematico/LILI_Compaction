@@ -260,9 +260,10 @@ function [rho_final, req_power, total_passes, total_cycles, lc_avg_dynamic, is_v
         N_total_current = current_pass * n_rollers; % Assume n_rollers effect captured in W_roller scale
         z_current = calculate_tandem_sinkage(W_roller, b_roller, D_roller, SOIL.kc, SOIL.kphi, N_total_current);
         h_pass = z_current - z_prev_pass;
+        h_eff = max(h_pass, 0.005*R_roller); %apply minimum area to prevent zero-area singularities
         
         % 2. Recalculate rp_eff based on incremental sinkage
-        [rp_eff, A_col, lc] = rp_fun(R_roller, b_roller, h_pass);
+        [rp_eff, A_col, lc] = rp_fun(R_roller, b_roller, h_eff);
         cycles_in_pass = ceil(f * (lc / v_sim));
         
         for k = 1:cycles_in_pass
