@@ -1,4 +1,5 @@
 clear; clc; close all;
+clear updateProgress;
 
 %% 1. Constants and Setup
 g_moon   = 1.62;      % m/s^2
@@ -10,6 +11,7 @@ n_rollers   = 1;
 bounce_margin = 1.0;
 h_layer  = 0.1;
 v_sim = 0.05;
+save_figures_to_disk = false; %Save .fig files
 
 % Soil properties (from CompactionChen.m)
 SOIL.rho   = 1600;   % kg/m^3
@@ -57,17 +59,17 @@ Valid_mask = false(size(F_grid));
 
 
 % Parpool setup
-poolobj = gcp('nocreate'); 
-if isempty(poolobj)
-    localCluster = parcluster('local'); 
-
-    % Request exactly 14 independent process workers.
-    % This maps 1-to-1 with your physical cores and prevents RAM exhaustion.
-    num_workers = min(14, localCluster.NumWorkers); 
-
-    fprintf('Starting optimized process pool with %d workers...\n', num_workers);
-    parpool(localCluster, num_workers); 
-end
+% poolobj = gcp('nocreate'); 
+% if isempty(poolobj)
+%     localCluster = parcluster('local'); 
+% 
+%     % Request exactly 14 independent process workers.
+%     % This maps 1-to-1 with your physical cores and prevents RAM exhaustion.
+%     num_workers = min(14, localCluster.NumWorkers); 
+% 
+%     fprintf('Starting optimized process pool with %d workers...\n', num_workers);
+%     parpool(localCluster, num_workers); 
+% end
 % 1. Set up the DataQueue
 D = parallel.pool.DataQueue;
 % 2. Define total iterations for percentage calculation
@@ -86,7 +88,7 @@ parfor i = 1:numel(F_grid)
     m_eccentric = M_ECC_grid(i);
     m_rov = M_ROV_grid(i);
     mass_ratio = M_RATIO_grid(i);
-    m_roller = M_RATIO_grid(i) * M_RATIO_grid(i) / n_rollers; 
+    m_roller = (mass_ratio * m_rov) / n_rollers; 
     R_roller = R_ROLLER_grid(i);
     
     % Derived parameters
@@ -114,7 +116,10 @@ parfor i = 1:numel(F_grid)
         Valid_mask(i) = true;
         success_count = success_count + 1;
     end
-    send(D,i);
+    
+    if mod(i, 50) == 0
+        send(D,i);
+    end
 end
 fprintf('Sweep complete. Successes: %d\n\n', success_count);
 toc
@@ -220,23 +225,27 @@ else
 end
 
 %% 6. Save Figures as .fig (Overwrite Existing)
-% This finds all open figures and saves them based on their figure number
-fig_handles = findobj('Type', 'figure');
+if save_figures_to_disk
+    % This finds all open figures and saves them based on their figure number
+    fig_handles = findall(0, 'Type', 'figure');
 
-for k = 1:length(fig_handles)
-    hFig = fig_handles(k);
-    num = hFig.Number;
-    
-    % Only save figures 1 through 5
-    if num >= 1 && num <= 5
-        filename = sprintf('fig%d.fig', num);
-        fprintf('Saving handle %d to %s...\n', hFig.Number, filename);
-        
-        % 'saveas' will overwrite by default if the file exists
-        saveas(hFig, filename);
+    for k = 1:length(fig_handles)
+        hFig = fig_handles(k);
+        if isvalid(hFig)
+            num = hFig.Number;
+            
+            % Only save figures 1 through 5
+            if num >= 1 && num <= 5
+                filename = sprintf('fig%d.fig', num);
+                fprintf('Saving handle %d to %s...\n', hFig.Number, filename);
+                
+                % 'saveas' will overwrite by default if the file exists
+                saveas(hFig, filename);
+            end
+        end
     end
+    fprintf('All figures saved successfully.\n');
 end
-fprintf('All figures saved successfully.\n');
 
 %% Functions (Copied from CompactionChen.m)
 function [rho_final, req_power, total_passes, total_cycles, lc_avg_dynamic, total_energy_kWh, is_valid] = ...
@@ -265,6 +274,15 @@ function [rho_final, req_power, total_passes, total_cycles, lc_avg_dynamic, tota
     rho_f = rho_min_lunar + target_relative_density * (rho_max_lunar - rho_min_lunar);
     rho = rho_i; % Set active tracking variable to the passed initial density
     
+    % --- PRECOMPUTED CONSTANTS FOR OPTIMIZATION ---
+    rho_slope = (2.15 - 1.63) / (1.95 - 1.27);
+    A_chen_inv = 1 / (pi * 0.151^2);
+    E_mult = 6.498e-4; % Combined 6.498e-10 * 1e6
+    nu_term = 1 - nu;
+    omega_sq_mvib_half = (m_vibrator * omega^2) / 2;
+    term2_fixed_part = (F0^2 * m_vibrator^2) / (m_roller_dynamic^2);
+    % ----------------------------------------------
+
     % Soil moduli functions (Earth-mapped density rho_e)
     %MOVED TO FUNCTIONS SECTION FOR OPTIMIZATION (IT WAS SLOW ASF!)
     % E_fun = @(rho_e) 6.498e-10 .* 1e6 .* exp(12.07.*rho_e);
@@ -337,19 +355,31 @@ function [rho_final, req_power, total_passes, total_cycles, lc_avg_dynamic, tota
             sum_lc = sum_lc + lc;
             % lc_history(n_total) = lc;
             
-            rho_e = translate_density(rho);
+            % --- INLINED PHYSICS (From: translate_density, k_cr_fun, ks_fun, ksu_fun, Pb logic) ---
+            % 1. Inline translate_density
+            rho_e = 1.63 + (rho - 1.27) * rho_slope;
+            if rho_e < 1.63, rho_e = 1.63; elseif rho_e > 2.15, rho_e = 2.15; end
             
-            Pb0 = 0.07932 * (100*rho_e - 184)^2;
-            r_chen = 0.151;
-            A_chen = pi * r_chen^2;
-            Pb = Pb0 * (A_col/A_chen);
+            % 2. Inline Pb calculation (Soil density functions)
+            Pb = 0.07932 * (100*rho_e - 184)^2 * (A_col * A_chen_inv);
 
-            kcr = k_cr_fun(rho_e);
-            ks = ks_fun(rho_e, rp_eff,nu);
-            ksu = ksu_fun(rho_e, rp_eff, kcr,nu);
+            % 3. Inline Moduli (ks, ksu from ks_fun, ksu_fun, E_fun, k_cr_fun)
+            E_val = E_mult * exp(12.07 * rho_e);
+            kcr = 5.686e12 * rho_e^(-41.58) + 0.9079;
+            ks = (2 * rp_eff * E_val) / nu_term;
+            ksu = ks * kcr;
 
-            xcr = chen_residual_deformation(F0, omega, ks, ksu, Pb, m_vibrator, m_roller_dynamic);
-            
+            % 4. Inline Residual Deformation (From: chen_residual_deformation)
+            if F0 <= Pb
+                xcr = 0;
+            else
+                term1_xcr = omega_sq_mvib_half / (ks^2 * Pb);
+                term2_xcr = term2_fixed_part - Pb^2;
+                xcr = term1_xcr * term2_xcr + (Pb/ks - Pb/ksu);
+                xcr = max(0, xcr);
+            end
+            % ----------------------------------------------------------------------------------
+
             % Sanity Checks
             if xcr > xcr_threshold
                 is_valid = false;
@@ -447,8 +477,8 @@ function updateProgress(total)
     if isempty(count)
         count = 0;
     end
-    count = count + 1;
+    count = count + 50;
     pct = (count / total) * 100;
     % Use \r to overwrite the line for a cleaner look
-    fprintf('Progress: %.2f%% (%d of %d)\n', pct, count, total);
+    fprintf('Progress: %.2f%% (%d of %d)\r', pct, count, total);
 end
