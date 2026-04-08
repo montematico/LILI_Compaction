@@ -35,7 +35,7 @@ rho_max_lunar = 1.95; % "
 rho_i         = 1.3;
 
 % Pareto Optimization Weights [Total Mass, Energy, Mass Ratio, Freq Diff from 50Hz]
-pareto_weights = [1.0, 0.5, 1.0, 0.2]; 
+pareto_weights = [1.0, 0.5, 0.0, 0.0]; 
 
 %% 2. Define the 5D Sweep Grid
 f_range = linspace(20, 50, 5);
@@ -59,7 +59,12 @@ Valid_mask = false(size(F_grid));
 fprintf('Running simulation for %d combinations...\n', numel(F_grid));
 success_count = 0;
 
-parpool("Threads")
+% Parpool setup
+poolobj = gcp('nocreate'); % Check if a pool already exists
+if isempty(poolobj)
+    parpool("Threads",[6,20]);    % Create a thread-based pool only if none exists
+end
+
 tic
 parfor i = 1:numel(F_grid)
     % Extract current iteration's parameters
@@ -125,28 +130,6 @@ else
     pareto_objectives = objectives(is_pareto, :);
     
     fprintf('Found %d Pareto-optimal points.\n', length(pareto_idx));
-    
-    % Find "knee" point using weighted normalization
-    min_vals = min(pareto_objectives, [], 1);
-    max_vals = max(pareto_objectives, [], 1);
-    range_vals = max_vals - min_vals;
-    range_vals(range_vals == 0) = 1; 
-    
-    norm_objectives = (pareto_objectives - min_vals) ./ range_vals;
-    weighted_scores = norm_objectives * pareto_weights';
-    [~, knee_local_idx] = min(weighted_scores);
-    knee_global_idx = pareto_idx(knee_local_idx);
-    
-    % Recommended Design Output
-    fprintf('--- Recommended Optimal Design ---\n');
-    fprintf('  Total Rover Mass: %.2f kg\n', M_ROV_grid(knee_global_idx));
-    fprintf('  Mass Ratio:       %.2f\n', M_RATIO_grid(knee_global_idx));
-    fprintf('  Frequency:        %.1f Hz\n', F_grid(knee_global_idx));
-    fprintf('  Eccentric Moment: %.4f kg-m\n', M_ECC_grid(knee_global_idx));
-    fprintf('  Roller Radius:    %.3f m\n', R_ROLLER_grid(knee_global_idx));
-    fprintf('  Total Pad Time:   %.1f hours\n', Time_results(knee_global_idx));
-    fprintf('  Pad Energy:       %.2f kWh\n', Energy_results(knee_global_idx));
-    fprintf('  Total Power:      %.2f Watts\n\n', Power_results(knee_global_idx));
 
     %% 5. Graphics and Plots
     
@@ -157,11 +140,6 @@ else
     pareto_mass_ratios = M_RATIO_grid(pareto_idx);
     
     scatter(pareto_m_rov, pareto_energy, 80, pareto_mass_ratios, 'filled');
-    hold on;
-    knee_m_rov = M_ROV_grid(knee_global_idx);
-    knee_e = Energy_results(knee_global_idx);
-    plot(knee_m_rov, knee_e, 'p', 'MarkerSize', 20, 'MarkerFaceColor', 'red', 'MarkerEdgeColor', 'k');
-    hold off;
     
     xlabel('Total Rover Mass (kg)');
     ylabel('Pad Energy (kWh)');
@@ -174,9 +152,6 @@ else
     % Figure 2: Feasibility Map (Frequency vs Mass)
     figure('Name', 'Pareto Optimal Configurations');
     plot(F_grid(pareto_idx), M_ROV_grid(pareto_idx), '^b', 'MarkerSize', 8, 'MarkerFaceColor', 'blue');
-    hold on;
-    plot(F_grid(knee_global_idx), M_ROV_grid(knee_global_idx), '*r', 'MarkerSize', 12, 'LineWidth', 1.5);
-    hold off;
     xlabel('Frequency (Hz)');
     ylabel('Total Rover Mass (kg)');
     title('Pareto Optimal Configurations in Frequency vs Mass Space');
@@ -200,10 +175,6 @@ else
     
     cnames = {'Total Mass (kg)', 'Mass Ratio', 'Radius (m)', 'Freq (Hz)', 'Ecc Mom (kg-m)', 'Pad Time (hr)', 'Energy (kWh)', 'Total Power (W)'};
     t = uitable('Data', tbl_data, 'ColumnName', cnames, 'RowName',[], 'Units', 'Normalized', 'Position', [0, 0, 1, 1]);
-    
-    knee_sorted_idx = find(sort_order == knee_local_idx);
-    s = uistyle('BackgroundColor', 'yellow');
-    addStyle(t, s, 'row', knee_sorted_idx);
 
     % Figure 4: Parallel Coordinates Plot
     figure('Name', 'Parallel Coordinates: Trade Space', 'Position', [100, 100, 1000, 500]);
@@ -226,6 +197,7 @@ else
     ylabel('Pad Energy (kWh)');
     zlabel('Eccentric Moment (kg-m)');
     grid on;
+    set(gca, 'ZScale', 'log'); % Fixes negative axis and scales eccentric moment properly
     title('3D Pareto Front: Mass, Energy, and Eccentric Moment');
     h3 = colorbar;
     ylabel(h3, 'Mass Ratio');
@@ -277,7 +249,11 @@ function [rho_final, req_power, total_passes, total_cycles, lc_avg_dynamic, tota
         
         % 3. Calculate Locomotion Resistances for this pass
         z_safe = max(z_current, 1e-6); % Prevent div-by-zero in bulldozing
-        alpha = max(acos(1 - 2*z_safe/D_roller), 1e-6);
+        
+        % Clamp the argument to [-1, 1] to prevent imaginary angles if sinkage exceeds wheel radius
+        alpha_arg = max(-1, min(1, 1 - 2*z_safe/D_roller));
+        alpha = max(acos(alpha_arg), 1e-6);
+        
         l_o = z_safe * tan(pi/4 - SOIL.phi/2)^2;
         
         R_r = m_rov * g_moon * c_f; % Rolling resistance
@@ -395,7 +371,8 @@ function z = calculate_tandem_sinkage(W_roller, b, D, kc, kphi, N_total_current)
     z_prev = 0;
     for i = 1:N_total_current
         term_load = (3 * W_roller) / (2 * (kc + b * kphi) * sqrt(D));
-        z_i = (term_load + z_prev^(1.5))^(2/3);
+        % Max(0, ...) prevents complex numbers if floating-point drift pushes z_prev slightly negative
+        z_i = (term_load + max(0, z_prev)^(1.5))^(2/3); 
         z_prev = z_i;
     end
     z = z_prev;
