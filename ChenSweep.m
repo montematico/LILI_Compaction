@@ -1,4 +1,4 @@
-clear; clc;
+clear; clc; close all;
 
 %% 1. Constants and Setup
 g_moon   = 1.62;      % m/s^2
@@ -218,6 +218,25 @@ else
     ylabel(h3, 'Mass Ratio');
     view(45, 30);
 end
+
+%% 6. Save Figures as .fig (Overwrite Existing)
+% This finds all open figures and saves them based on their figure number
+fig_handles = findobj('Type', 'figure');
+
+for k = 1:length(fig_handles)
+    hFig = fig_handles(k);
+    num = hFig.Number;
+    
+    % Only save figures 1 through 5
+    if num >= 1 && num <= 5
+        filename = sprintf('fig%d.fig', num);
+        fprintf('Saving handle %d to %s...\n', hFig.Number, filename);
+        
+        % 'saveas' will overwrite by default if the file exists
+        saveas(hFig, filename);
+    end
+end
+fprintf('All figures saved successfully.\n');
 
 %% Functions (Copied from CompactionChen.m)
 function [rho_final, req_power, total_passes, total_cycles, lc_avg_dynamic, total_energy_kWh, is_valid] = ...
