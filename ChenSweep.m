@@ -7,7 +7,7 @@ Apad     = 500;       % m^2
 Tavail_h = 365*24;    % hours, total allowed compaction time
 target_relative_density = 0.85;
 roller_fraction = 0.5;
-n_rollers   = 1;
+n_rollers   = 2;
 bounce_margin = 1.0;
 h_layer  = 0.1;
 v_sim = 0.05;
@@ -254,7 +254,7 @@ function [rho_final, req_power, total_passes, total_cycles, lc_avg_dynamic, tota
     % Internal Initializations
     R_roller = D_roller / 2;
     omega = 2 * pi * f;
-    m_roller_dynamic = (m_rov / 2) * mass_ratio;
+    m_roller_dynamic = (m_rov * mass_ratio) / n_rollers;
     F0 = m_eccentric * omega^2;
     
     % FAST FAIL: Bounce check
@@ -341,7 +341,7 @@ function [rho_final, req_power, total_passes, total_cycles, lc_avg_dynamic, tota
         F_loco = R_r + R_c + R_b; % Total forward force required
         
         % Calculate Work for this pass
-        d_pass = Apad / (b_roller * n_rollers); % Distance traveled per pass
+        d_pass = Apad / b_roller; % Distance traveled per pass
         work_loco_pass = F_loco * d_pass; % Joules
         total_energy_Joule = total_energy_Joule + work_loco_pass;
         
