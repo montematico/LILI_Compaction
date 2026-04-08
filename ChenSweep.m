@@ -38,11 +38,11 @@ rho_i         = 1.3;
 pareto_weights = [1.0, 0.5, 0.0, 0.0]; 
 
 %% 2. Define the 5D Sweep Grid
-f_range = linspace(20, 50, 5);
-m_eccentric_range = logspace(-5, -1, 5);
-m_rov_range = linspace(20, 100, 5);
+f_range = linspace(10, 50, 5);
+m_eccentric_range = logspace(-4, log10(0.5e-2), 5);
+m_rov_range = linspace(20, 80, 5);
 mass_ratio_range = linspace(0.2, 0.8, 5);
-R_roller_range = linspace(0.15, 0.4, 5);
+R_roller_range = linspace(0.07, 0.20, 5);
 
 [F_grid, M_ECC_grid, M_ROV_grid, M_RATIO_grid, R_ROLLER_grid] = ndgrid(f_range, m_eccentric_range, m_rov_range, mass_ratio_range, R_roller_range);
 
@@ -55,15 +55,27 @@ Energy_results = nan(size(F_grid));
 Time_results = nan(size(F_grid));
 Valid_mask = false(size(F_grid));
 
+
+% Parpool setup
+poolobj = gcp('nocreate'); 
+if isempty(poolobj)
+    localCluster = parcluster('local'); 
+
+    % Request exactly 14 independent process workers.
+    % This maps 1-to-1 with your physical cores and prevents RAM exhaustion.
+    num_workers = min(14, localCluster.NumWorkers); 
+
+    fprintf('Starting optimized process pool with %d workers...\n', num_workers);
+    parpool(localCluster, num_workers); 
+end
+% 1. Set up the DataQueue
+D = parallel.pool.DataQueue;
+% 2. Tell the queue what to do when it receives a message (print it!)
+afterEach(D, @(iter_num) fprintf('Completed Iter: %d\n', iter_num));
+
 %% 3. The Main Sweep Loop
 fprintf('Running simulation for %d combinations...\n', numel(F_grid));
 success_count = 0;
-
-% Parpool setup
-poolobj = gcp('nocreate'); % Check if a pool already exists
-if isempty(poolobj)
-    parpool("Threads",[6,20]);    % Create a thread-based pool only if none exists
-end
 
 tic
 parfor i = 1:numel(F_grid)
@@ -100,6 +112,7 @@ parfor i = 1:numel(F_grid)
         Valid_mask(i) = true;
         success_count = success_count + 1;
     end
+    send(D,i);
 end
 fprintf('Sweep complete. Successes: %d\n\n', success_count);
 toc
@@ -175,7 +188,7 @@ else
     
     cnames = {'Total Mass (kg)', 'Mass Ratio', 'Radius (m)', 'Freq (Hz)', 'Ecc Mom (kg-m)', 'Pad Time (hr)', 'Energy (kWh)', 'Total Power (W)'};
     t = uitable('Data', tbl_data, 'ColumnName', cnames, 'RowName',[], 'Units', 'Normalized', 'Position', [0, 0, 1, 1]);
-
+    t.ColumnSortable = true; %allow sorting of columns
     % Figure 4: Parallel Coordinates Plot
     figure('Name', 'Parallel Coordinates: Trade Space', 'Position', [100, 100, 1000, 500]);
     pareto_table = table(F_grid(pareto_idx), M_ECC_grid(pareto_idx), M_ROV_grid(pareto_idx), R_ROLLER_grid(pareto_idx), M_RATIO_grid(pareto_idx), Energy_results(pareto_idx), ...
@@ -214,24 +227,44 @@ function [rho_final, req_power, total_passes, total_cycles, lc_avg_dynamic, tota
     m_roller_dynamic = (m_rov / 2) * mass_ratio;
     F0 = m_eccentric * omega^2;
     
+    % FAST FAIL: Bounce check
+    %this allow us to avoid doing extra while and for loops that 100% will fail.
+    if F0 >= (W_roller * bounce_margin)
+        is_valid = false; 
+        rho_final = NaN; 
+        req_power = NaN;
+        total_passes = NaN;
+        total_cycles = NaN;
+        lc_avg_dynamic = NaN;
+        total_energy_kWh = NaN;
+        return;
+    end
+
+
     rho_f = rho_min_lunar + target_relative_density * (rho_max_lunar - rho_min_lunar);
     rho = rho_i; % Set active tracking variable to the passed initial density
     
     % Soil moduli functions (Earth-mapped density rho_e)
-    E_fun = @(rho_e) 6.498e-10 .* 1e6 .* exp(12.07.*rho_e);
-    k_cr_fun =  @(rho_e) 5.686e12 * rho_e^(-41.58) + 0.9079;
-    ks_fun = @(rho_e,rp) 2*rp * E_fun(rho_e) / (1-nu);
-    ksu_fun = @(rho_e,rp,kcr) 2*rp * (kcr * E_fun(rho_e)) / (1-nu);
+    %MOVED TO FUNCTIONS SECTION FOR OPTIMIZATION (IT WAS SLOW ASF!)
+    % E_fun = @(rho_e) 6.498e-10 .* 1e6 .* exp(12.07.*rho_e);
+    % k_cr_fun =  @(rho_e) 5.686e12 * rho_e^(-41.58) + 0.9079;
+    % ks_fun = @(rho_e,rp) 2*rp * E_fun(rho_e) / (1-nu);
+    % ksu_fun = @(rho_e,rp,kcr) 2*rp * (kcr * E_fun(rho_e)) / (1-nu);
+
 
     % Loop trackers
     current_pass = 0;
-    z_prev_pass = 0;
-    n_total = 0;
-    lc_history = [];
-    xcr_threshold = 0.15 * h_layer;
+    z_prev_pass = 0; 
+    n_total = 0; %number of cycles
+    sum_lc = 0; % for running sum
+    
+    xcr_threshold = 0.15 * h_layer; %plastic deformation thresh.
     is_valid = true;
-    req_power = 0;
     total_energy_Joule = 0; % Track cumulative work done
+
+    % Power Model
+    KE_peak = (m_eccentric * omega)^2 / (2 * m_roller_dynamic);
+    req_power = (KE_peak * f) / eta_mech;
 
     while rho < rho_f
         current_pass = current_pass + 1;
@@ -277,9 +310,11 @@ function [rho_final, req_power, total_passes, total_cycles, lc_avg_dynamic, tota
         [rp_eff, A_col, lc] = rp_fun(R_roller, b_roller, h_eff);
         cycles_in_pass = ceil(f * (lc / v_sim));
         
+       
         for k = 1:cycles_in_pass
             n_total = n_total + 1;
-            lc_history(n_total) = lc;
+            sum_lc = sum_lc + lc;
+            % lc_history(n_total) = lc;
             
             rho_e = translate_density(rho);
             
@@ -289,8 +324,8 @@ function [rho_final, req_power, total_passes, total_cycles, lc_avg_dynamic, tota
             Pb = Pb0 * (A_col/A_chen);
 
             kcr = k_cr_fun(rho_e);
-            ks = ks_fun(rho_e, rp_eff);
-            ksu = ksu_fun(rho_e, rp_eff, kcr);
+            ks = ks_fun(rho_e, rp_eff,nu);
+            ksu = ksu_fun(rho_e, rp_eff, kcr,nu);
 
             xcr = chen_residual_deformation(F0, omega, ks, ksu, Pb, m_vibrator, m_roller_dynamic);
             
@@ -298,17 +333,10 @@ function [rho_final, req_power, total_passes, total_cycles, lc_avg_dynamic, tota
             if xcr > xcr_threshold
                 is_valid = false;
                 break;
-            elseif F0 >= (W_roller * bounce_margin)
-                is_valid = false;
-                break;
             elseif F0 <= Pb && rho < rho_f
                 is_valid = false;
                 break;
             end
-
-            % Power Model
-            KE_peak = (m_eccentric * omega)^2 / (2 * m_roller_dynamic);
-            req_power = (KE_peak * f) / eta_mech;
 
             if xcr > 0
                 h_layer_new = h_layer - xcr;
@@ -335,7 +363,8 @@ function [rho_final, req_power, total_passes, total_cycles, lc_avg_dynamic, tota
         rho_final = rho;
         total_passes = current_pass;
         total_cycles = n_total;
-        lc_avg_dynamic = mean(lc_history);
+        % lc_avg_dynamic = mean(lc_history);
+        lc_avg_dynamic = sum_lc / n_total;
         total_energy_kWh = total_energy_Joule / 3.6e6; % Convert J to kWh
     else
         rho_final = NaN;
@@ -383,3 +412,10 @@ function rho_earth = translate_density(rho_lunar)
     rho_earth = 1.63 + (rho_lunar - 1.27) * slope;
     rho_earth = max(1.63, min(2.15, rho_earth));
 end
+
+%Soil density function
+    % Soil moduli functions (Earth-mapped density rho_e)
+function E = E_fun(rho_e); E = 6.498e-10 .* 1e6 .* exp(12.07.*rho_e); end
+function k_cr = k_cr_fun(rho_e); k_cr = 5.686e12 * rho_e^(-41.58) + 0.9079; end
+function ks = ks_fun(rho_e,rp,nu); ks = 2*rp * E_fun(rho_e) / (1-nu); end
+function ksu = ksu_fun(rho_e,rp,kcr,nu); ksu = 2*rp * (kcr * E_fun(rho_e)) / (1-nu); end
