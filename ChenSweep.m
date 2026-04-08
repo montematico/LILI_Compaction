@@ -88,7 +88,6 @@ parfor i = 1:numel(F_grid)
     m_eccentric = M_ECC_grid(i);
     m_rov = M_ROV_grid(i);
     mass_ratio = M_RATIO_grid(i);
-    m_roller = (mass_ratio * m_rov) / n_rollers; 
     R_roller = R_ROLLER_grid(i);
     
     % Derived parameters
@@ -96,9 +95,9 @@ parfor i = 1:numel(F_grid)
     b_roller = 0.3; % Fixed width
     W_roller = (m_rov * g_moon * roller_fraction) / n_rollers;
     
-    % Call the simulation function
+    % Call the simulation function (Removed m_roller from arguments)
     [rho_final, req_power, total_passes, total_cycles, lc_avg_dynamic, total_energy_kWh, is_valid] = ...
-        run_compaction_sim(W_roller, b_roller, D_roller, m_eccentric, f, v_sim, mass_ratio, m_rov, target_relative_density, bounce_margin, h_layer, SOIL, eta_mech, m_roller, nu, rho_min_lunar, rho_max_lunar, rho_i, Apad, n_rollers, c_f, g_moon);
+        run_compaction_sim(W_roller, b_roller, D_roller, m_eccentric, f, v_sim, mass_ratio, m_rov, target_relative_density, bounce_margin, h_layer, SOIL, eta_mech, nu, rho_min_lunar, rho_max_lunar, rho_i, Apad, n_rollers, c_f, g_moon);
     
     if is_valid && ~isnan(rho_final)
         % Pad Energy & Time Calculation
@@ -249,38 +248,37 @@ end
 
 %% Functions (Copied from CompactionChen.m)
 function [rho_final, req_power, total_passes, total_cycles, lc_avg_dynamic, total_energy_kWh, is_valid] = ...
-    run_compaction_sim(W_roller, b_roller, D_roller, m_eccentric, f, v_sim, mass_ratio, m_rov, target_relative_density, bounce_margin, h_layer, SOIL, eta_mech, m_vibrator, nu, rho_min_lunar, rho_max_lunar, rho_i, Apad, n_rollers, c_f, g_moon)
+    run_compaction_sim(W_roller, b_roller, D_roller, m_eccentric, f, v_sim, mass_ratio, m_rov, target_relative_density, bounce_margin, h_layer, SOIL, eta_mech, nu, rho_min_lunar, rho_max_lunar, rho_i, Apad, n_rollers, c_f, g_moon)
     
     % Internal Initializations
     R_roller = D_roller / 2;
     omega = 2 * pi * f;
-    m_roller_dynamic = (m_rov * mass_ratio) / n_rollers;
+    
+    % --- Physical Mass Derivations ---
+    m_total_wheel = m_rov / n_rollers;        % Total mass acting on one wheel
+    m_drum = m_total_wheel * mass_ratio;      % Mass of the bouncing steel drum (Chen's mp)
+    
     F0 = m_eccentric * omega^2;
     
     % FAST FAIL: Bounce check
-    %this allow us to avoid doing extra while and for loops that 100% will fail.
     if F0 >= (W_roller * bounce_margin)
         is_valid = false; 
-        rho_final = NaN; 
-        req_power = NaN;
-        total_passes = NaN;
-        total_cycles = NaN;
-        lc_avg_dynamic = NaN;
-        total_energy_kWh = NaN;
+        rho_final = NaN; req_power = NaN; total_passes = NaN; total_cycles = NaN; lc_avg_dynamic = NaN; total_energy_kWh = NaN;
         return;
     end
-
-
+    
     rho_f = rho_min_lunar + target_relative_density * (rho_max_lunar - rho_min_lunar);
-    rho = rho_i; % Set active tracking variable to the passed initial density
+    rho = rho_i; 
     
     % --- PRECOMPUTED CONSTANTS FOR OPTIMIZATION ---
     rho_slope = (2.15 - 1.63) / (1.95 - 1.27);
     A_chen_inv = 1 / (pi * 0.151^2);
     E_mult = 6.498e-4; % Combined 6.498e-10 * 1e6
     nu_term = 1 - nu;
-    omega_sq_mvib_half = (m_vibrator * omega^2) / 2;
-    term2_fixed_part = (F0^2 * m_vibrator^2) / (m_roller_dynamic^2);
+    
+    % Updated for new mass variables
+    omega_sq_mdrum_half = (m_drum * omega^2) / 2;
+    term2_fixed_part = (F0^2 * m_drum^2) / (m_total_wheel^2);
     % ----------------------------------------------
 
     % Soil moduli functions (Earth-mapped density rho_e)
@@ -302,11 +300,12 @@ function [rho_final, req_power, total_passes, total_cycles, lc_avg_dynamic, tota
     total_energy_Joule = 0; % Track cumulative work done
 
     % Power Model
-    KE_peak = (m_eccentric * omega)^2 / (2 * m_roller_dynamic);
+    KE_peak = (m_eccentric * omega)^2 / (2 * m_drum);
     req_power = (KE_peak * f) / eta_mech;
 
     while rho < rho_f
         current_pass = current_pass + 1;
+        rho_before_pass = rho; % Track density before the pass starts
         
         % 1. Interpolate Soil Moduli based on Relative Density
         frac = max(0, min(1, (rho - rho_min_lunar) / (rho_max_lunar - rho_min_lunar)));
@@ -373,7 +372,7 @@ function [rho_final, req_power, total_passes, total_cycles, lc_avg_dynamic, tota
             if F0 <= Pb
                 xcr = 0;
             else
-                term1_xcr = omega_sq_mvib_half / (ks^2 * Pb);
+                term1_xcr = omega_sq_mdrum_half / (ks^2 * Pb);
                 term2_xcr = term2_fixed_part - Pb^2;
                 xcr = term1_xcr * term2_xcr + (Pb/ks - Pb/ksu);
                 xcr = max(0, xcr);
@@ -404,6 +403,12 @@ function [rho_final, req_power, total_passes, total_cycles, lc_avg_dynamic, tota
         work_vib_pass = req_power * t_pass; % Joules
         total_energy_Joule = total_energy_Joule + work_vib_pass;
 
+        % Fail early if this pass made no progress (prevents infinite loops/slow hangs)
+        if rho <= rho_before_pass
+            is_valid = false;
+            break;
+        end
+
         if ~is_valid || rho >= rho_f, break; end
         if n_total > 1e6, is_valid = false; break; end 
         z_prev_pass = z_current;
@@ -427,13 +432,13 @@ function [rho_final, req_power, total_passes, total_cycles, lc_avg_dynamic, tota
     end
 end
 
-function xcr = chen_residual_deformation(F0, omega, ks, ksu, Pb, m_vibrator, m_roller_dynamic)
+function xcr = chen_residual_deformation(F0, omega, ks, ksu, Pb, m_drum, m_total_wheel)
     if F0 <= Pb
         xcr = 0;
         return;
     end
-    term1 = (m_vibrator * omega^2) / (2 * ks^2 * Pb);
-    term2 = (F0^2 * m_vibrator^2) / (m_roller_dynamic^2) - Pb^2;
+    term1 = (m_drum * omega^2) / (2 * ks^2 * Pb);
+    term2 = (F0^2 * m_drum^2) / (m_total_wheel^2) - Pb^2;
     term3 = Pb/ks - Pb/ksu;
     xcr = term1 * term2 + term3;
     xcr = max(0, xcr);
