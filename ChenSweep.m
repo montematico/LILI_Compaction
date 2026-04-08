@@ -70,8 +70,10 @@ if isempty(poolobj)
 end
 % 1. Set up the DataQueue
 D = parallel.pool.DataQueue;
-% 2. Tell the queue what to do when it receives a message (print it!)
-afterEach(D, @(iter_num) fprintf('Completed Iter: %d\n', iter_num));
+% 2. Define total iterations for percentage calculation
+total_iters = numel(F_grid);
+% 3. Use an anonymous function with a persistent counter to track progress
+afterEach(D, @(x) updateProgress(total_iters));
 
 %% 3. The Main Sweep Loop
 fprintf('Running simulation for %d combinations...\n', numel(F_grid));
@@ -419,3 +421,15 @@ function E = E_fun(rho_e); E = 6.498e-10 .* 1e6 .* exp(12.07.*rho_e); end
 function k_cr = k_cr_fun(rho_e); k_cr = 5.686e12 * rho_e^(-41.58) + 0.9079; end
 function ks = ks_fun(rho_e,rp,nu); ks = 2*rp * E_fun(rho_e) / (1-nu); end
 function ksu = ksu_fun(rho_e,rp,kcr,nu); ksu = 2*rp * (kcr * E_fun(rho_e)) / (1-nu); end
+
+
+function updateProgress(total)
+    persistent count
+    if isempty(count)
+        count = 0;
+    end
+    count = count + 1;
+    pct = (count / total) * 100;
+    % Use \r to overwrite the line for a cleaner look
+    fprintf('Progress: %.2f%% (%d of %d)\n', pct, count, total);
+end

@@ -1,6 +1,6 @@
 *.pdf
 *.mat
 *.asv
-instuctions.md
-.giminiignore
+instructions.md
+.geminiignore
 .gemini/
