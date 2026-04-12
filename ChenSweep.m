@@ -4,7 +4,8 @@ clear updateProgress;
 %% 1. Constants and Setup
 g_moon   = 1.62;      % m/s^2
 Apad     = 500;       % m^2
-Tavail_h = 365*24;    % hours, total allowed compaction time
+Tavail_h = 500;    % hours, total allowed compaction time
+energy_max_kWh = 50;
 target_relative_density = 0.85;
 roller_fraction = 0.5;
 n_rollers   = 2;
@@ -25,7 +26,7 @@ SOIL.c     = 170;    % N/m^2
 % Locomotion and Dense Soil Parameters
 c_f = 0.05;                % Coefficient of rolling friction
 SOIL.kc_dense   = SOIL.kc*5;    % N/m^2 (Assumed 5x "loose" state)
-SOIL.kphi_dense = SOIL.phi*5; % N/m^3 (Assumed 5x "loose" state)
+SOIL.kphi_dense = SOIL.kphi*5; % N/m^3 (Assumed 5x "loose" state)
 SOIL.K_c = 33.37;          % Terzaghi cohesive modulus for lunar soil
 SOIL.K_gamma = 72.77;      % Terzaghi frictional modulus for lunar soil
 
@@ -99,6 +100,19 @@ parfor i = 1:numel(F_grid)
     [rho_final, req_power, total_passes, total_cycles, lc_avg_dynamic, total_energy_kWh, is_valid] = ...
         run_compaction_sim(W_roller, b_roller, D_roller, m_eccentric, f, v_sim, mass_ratio, m_rov, target_relative_density, bounce_margin, h_layer, SOIL, eta_mech, nu, rho_min_lunar, rho_max_lunar, rho_i, Apad, n_rollers, c_f, g_moon);
     
+    %Time and power sanity check
+    if is_valid
+        % 1. Calculate final pad time
+        distance_to_cover_pad = Apad / b_roller; 
+        time_per_pass_seconds = distance_to_cover_pad / v_sim;
+        total_time_hours = (total_passes * time_per_pass_seconds) / 3600;
+        
+        % 2. Apply Sanity Filters
+        if total_time_hours > Tavail_h || total_energy_kWh > energy_max_kWh
+            is_valid = false; % Discard if it takes too long or uses too much energy
+        end
+    end
+
     if is_valid && ~isnan(rho_final)
         % Pad Energy & Time Calculation
         distance_to_cover_pad = Apad / b_roller; 
@@ -170,11 +184,13 @@ else
 
     % Figure 2: Feasibility Map (Frequency vs Mass)
     figure('Name', 'Pareto Optimal Configurations');
-    plot(F_grid(pareto_idx), M_ROV_grid(pareto_idx), '^b', 'MarkerSize', 8, 'MarkerFaceColor', 'blue');
+    scatter(F_grid(pareto_idx), M_ROV_grid(pareto_idx), 80, M_RATIO_grid(pareto_idx), '^', 'filled');
     xlabel('Frequency (Hz)');
     ylabel('Total Rover Mass (kg)');
     title('Pareto Optimal Configurations in Frequency vs Mass Space');
     grid on;
+    h2 = colorbar; 
+    ylabel(h2, 'Mass Ratio');
 
     % Figure 3: Pareto Table
     figure('Name', 'Pareto Optimal Set');
@@ -192,12 +208,14 @@ else
     [~, sort_order] = sort(tbl_data_points(:,1), 'ascend'); % Sort by Total Mass
     tbl_data = tbl_data_points(sort_order, :);
     
-    cnames = {'Total Mass (kg)', 'Mass Ratio', 'Radius (m)', 'Freq (Hz)', 'Ecc Mom (kg-m)', 'Pad Time (hr)', 'Energy (kWh)', 'Total Power (W)'};
-    t = uitable('Data', tbl_data, 'ColumnName', cnames, 'RowName',[], 'Units', 'Normalized', 'Position', [0, 0, 1, 1]);
+    cnames = {'Total_Mass_kg', 'Mass_Ratio', 'Radius_m', 'Freq_Hz', 'Ecc_Mom_kg_m', 'Pad_Time_hr', 'Energy_kWh', 'Total_Power_W'};
+    T_pareto = array2table(tbl_data, 'VariableNames', cnames);
+    t = uitable('Data', T_pareto, 'Units', 'Normalized', 'Position', [0, 0, 1, 1]);
     t.ColumnSortable = true; %allow sorting of columns
+    
     % Figure 4: Parallel Coordinates Plot
     figure('Name', 'Parallel Coordinates: Trade Space', 'Position', [100, 100, 1000, 500]);
-    pareto_table = table(F_grid(pareto_idx), M_ECC_grid(pareto_idx), M_ROV_grid(pareto_idx), R_ROLLER_grid(pareto_idx), M_RATIO_grid(pareto_idx), Energy_results(pareto_idx), ...
+    pareto_table = table(real(F_grid(pareto_idx)), real(M_ECC_grid(pareto_idx)), real(M_ROV_grid(pareto_idx)), real(R_ROLLER_grid(pareto_idx)), real(M_RATIO_grid(pareto_idx)), real(Energy_results(pareto_idx)), ...
         'VariableNames', {'Freq_Hz', 'Ecc_Moment', 'Rover_Mass', 'Radius_m', 'Mass_Ratio', 'Energy_kWh'});
     
     p = parallelplot(pareto_table);
@@ -208,16 +226,15 @@ else
     end
     title('Parallel Coordinates: Pareto Optimal Configurations');
 
-    % Figure 5: 3D Pareto Scatter (explicitly showing m_eccentric)
-    figure('Name', '3D Pareto Front: Mass, Energy, and Eccentric Moment');
-    pareto_m_ecc = M_ECC_grid(pareto_idx);
-    scatter3(pareto_m_rov, pareto_energy, pareto_m_ecc, 80, pareto_mass_ratios, 'filled');
+    % Figure 5: 3D Pareto Front: Mass, Energy, and Roller Radius
+    figure('Name', '3D Pareto Front: Mass, Energy, and Roller Radius');
+    pareto_radius = R_ROLLER_grid(pareto_idx);
+    scatter3(pareto_m_rov, pareto_energy, pareto_radius, 80, pareto_mass_ratios, 'filled');
     xlabel('Total Rover Mass (kg)');
     ylabel('Pad Energy (kWh)');
-    zlabel('Eccentric Moment (kg-m)');
+    zlabel('Roller Radius (m)');
     grid on;
-    set(gca, 'ZScale', 'log'); % Fixes negative axis and scales eccentric moment properly
-    title('3D Pareto Front: Mass, Energy, and Eccentric Moment');
+    title('3D Pareto Front: Mass, Energy, and Roller Radius');
     h3 = colorbar;
     ylabel(h3, 'Mass Ratio');
     view(45, 30);
