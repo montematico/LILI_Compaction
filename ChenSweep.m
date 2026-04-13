@@ -4,15 +4,21 @@ clear updateProgress;
 %% 1. Constants and Setup
 g_moon   = 1.62;      % m/s^2
 Apad     = 500;       % m^2
-Tavail_h = 500;    % hours, total allowed compaction time
-energy_max_kWh = 50;
+Tavail_h = 4380;    % hours, total allowed compaction time for 1 pad - 6mon
+energy_max_kWh = 400;
 target_relative_density = 0.85;
 roller_fraction = 0.5;
 n_rollers   = 2;
-bounce_margin = 1.0;
-h_layer  = 0.1;
+bounce_margin = 1.2;
+h_layer  = 0.12; %depth of layer being compacted
 v_sim = 0.05;
 save_figures_to_disk = false; %Save .fig files
+dry_run = false; % Set to true to run only 10 combinations for testing
+P_hotel = 100; % Watts, baseline power
+battery_density_Wh_kg = 150; % Wh/kg
+max_battery_fraction = 0.8; % Max mass fraction for battery
+t_work_cycle_h = 6; % hours of work before recharge
+t_charge_cycle_h = 6; % hours to recharge
 
 % Soil properties (from CompactionChen.m)
 SOIL.rho   = 1600;   % kg/m^3
@@ -43,7 +49,7 @@ pareto_weights = [1.0, 0.5, 0.0, 0.0];
 %% 2. Define the 5D Sweep Grid
 f_range = linspace(10, 50, 5);
 m_eccentric_range = logspace(-4, log10(0.5e-2), 5);
-m_rov_range = linspace(20, 80, 5);
+m_rov_range = linspace(20, 100, 10);
 mass_ratio_range = linspace(0.2, 0.8, 5);
 R_roller_range = linspace(0.07, 0.20, 5);
 
@@ -58,6 +64,23 @@ Energy_results = nan(size(F_grid));
 Time_results = nan(size(F_grid));
 Valid_mask = false(size(F_grid));
 
+if dry_run
+    fprintf('DRY RUN ENABLED: Slicing grid to first 10 combinations.\n');
+    F_grid = F_grid(1:min(10, end));
+    M_ECC_grid = M_ECC_grid(1:min(10, end));
+    M_ROV_grid = M_ROV_grid(1:min(10, end));
+    M_RATIO_grid = M_RATIO_grid(1:min(10, end));
+    R_ROLLER_grid = R_ROLLER_grid(1:min(10, end));
+    
+    % Re-initialize results arrays for sliced grid
+    Rho_results = nan(size(F_grid));
+    Power_results = nan(size(F_grid));
+    Passes_results = nan(size(F_grid));
+    Cycles_results = nan(size(F_grid));
+    Energy_results = nan(size(F_grid));
+    Time_results = nan(size(F_grid));
+    Valid_mask = false(size(F_grid));
+end
 
 % Parpool setup
 % poolobj = gcp('nocreate'); 
@@ -96,16 +119,21 @@ parfor i = 1:numel(F_grid)
     b_roller = 0.3; % Fixed width
     W_roller = (m_rov * g_moon * roller_fraction) / n_rollers;
     
-    % Call the simulation function (Removed m_roller from arguments)
-    [rho_final, req_power, total_passes, total_cycles, lc_avg_dynamic, total_energy_kWh, is_valid] = ...
-        run_compaction_sim(W_roller, b_roller, D_roller, m_eccentric, f, v_sim, mass_ratio, m_rov, target_relative_density, bounce_margin, h_layer, SOIL, eta_mech, nu, rho_min_lunar, rho_max_lunar, rho_i, Apad, n_rollers, c_f, g_moon);
+    % Call the simulation function (Updated with battery and hotel power)
+    [rho_final, total_avg_power_W, total_passes, total_cycles, lc_avg_dynamic, total_energy_kWh, is_valid] = ...
+        run_compaction_sim(W_roller, b_roller, D_roller, m_eccentric, f, v_sim, mass_ratio, m_rov, ...
+        target_relative_density, bounce_margin, h_layer, SOIL, eta_mech, nu, rho_min_lunar, rho_max_lunar, rho_i, ...
+        Apad, n_rollers, c_f, g_moon, P_hotel, battery_density_Wh_kg, max_battery_fraction, t_work_cycle_h);
     
     %Time and power sanity check
     if is_valid
-        % 1. Calculate final pad time
+        % 1. Calculate final pad mission time including recharge cycles
         distance_to_cover_pad = Apad / b_roller; 
         time_per_pass_seconds = distance_to_cover_pad / v_sim;
-        total_time_hours = (total_passes * time_per_pass_seconds) / 3600;
+        total_active_time_hours = (total_passes * time_per_pass_seconds) / 3600;
+        
+        charge_cycles = max(0, ceil(total_active_time_hours / t_work_cycle_h) - 1);
+        total_time_hours = total_active_time_hours + (charge_cycles * t_charge_cycle_h);
         
         % 2. Apply Sanity Filters
         if total_time_hours > Tavail_h || total_energy_kWh > energy_max_kWh
@@ -114,14 +142,16 @@ parfor i = 1:numel(F_grid)
     end
 
     if is_valid && ~isnan(rho_final)
-        % Pad Energy & Time Calculation
+        % Pad Energy & Time Calculation (Repeat logic for storage)
         distance_to_cover_pad = Apad / b_roller; 
         time_per_pass_seconds = distance_to_cover_pad / v_sim;
-        total_time_hours = (total_passes * time_per_pass_seconds) / 3600;
+        total_active_time_hours = (total_passes * time_per_pass_seconds) / 3600;
+        charge_cycles = max(0, ceil(total_active_time_hours / t_work_cycle_h) - 1);
+        total_time_hours = total_active_time_hours + (charge_cycles * t_charge_cycle_h);
         
         % Store successful results
         Rho_results(i) = rho_final;
-        Power_results(i) = req_power;
+        Power_results(i) = total_avg_power_W;
         Passes_results(i) = total_passes;
         Cycles_results(i) = total_cycles;
         Energy_results(i) = total_energy_kWh;
@@ -129,7 +159,7 @@ parfor i = 1:numel(F_grid)
         Valid_mask(i) = true;
         success_count = success_count + 1;
     end
-    
+    %Intermittent Status updates
     if mod(i, 50) == 0
         send(D,i);
     end
@@ -165,19 +195,19 @@ else
     fprintf('Found %d Pareto-optimal points.\n', length(pareto_idx));
 
     %% 5. Graphics and Plots
-    
-    % Figure 1: 2D Pareto Front Scatter
-    figure('Name', 'Pareto Front: Mass vs. Pad Energy');
     pareto_m_rov = M_ROV_grid(pareto_idx);
     pareto_energy = Energy_results(pareto_idx);
     pareto_mass_ratios = M_RATIO_grid(pareto_idx);
+    pareto_radius = R_ROLLER_grid(pareto_idx);
     
-    scatter(pareto_m_rov, pareto_energy, 80, pareto_mass_ratios, 'filled');
+    % Figure 1: 2D Pareto Front Scatter
+    figure('Name', 'Pareto Front: Mass vs. Pad Energy');
+    scatter(M_ROV_grid(valid_idx), Energy_results(valid_idx), 80, M_RATIO_grid(valid_idx), 'filled');
     
     xlabel('Total Rover Mass (kg)');
     ylabel('Pad Energy (kWh)');
     grid on;
-    title('Pareto Front: Total Mass vs. Pad Energy');
+    title('Trade Space: Total Mass vs. Pad Energy');
     colormap(flipud(parula));
     h = colorbar;
     ylabel(h, 'Mass Ratio');
@@ -238,6 +268,20 @@ else
     h3 = colorbar;
     ylabel(h3, 'Mass Ratio');
     view(45, 30);
+    % Figure 6: Trade Space - Mass vs. Time (Energy Color)
+    figure('Name', 'Trade Space: Mass vs. Time (Energy)');
+    scatter(M_ROV_grid(valid_idx), Time_results(valid_idx), 80, Energy_results(valid_idx), 'filled', 'MarkerEdgeColor', 'k');
+    hold on;
+    scatter(M_ROV_grid(pareto_idx), Time_results(pareto_idx), 120, 'r', 'LineWidth', 2); % Red circles around the 'best' points
+    xlabel('Total Rover Mass (kg)');
+    ylabel('Total Mission Time (hr)');
+    grid on;
+    title('Trade Space: Total Mass vs. Mission Time');
+    legend('Feasible Designs', 'Pareto Optimal Front');
+    colormap(turbo);
+    h6 = colorbar;
+    ylabel(h6, 'Total Energy (kWh)');
+    hold off;
 end
 
 %% 6. Save Figures as .fig (Overwrite Existing)
@@ -250,8 +294,8 @@ if save_figures_to_disk
         if isvalid(hFig)
             num = hFig.Number;
             
-            % Only save figures 1 through 5
-            if num >= 1 && num <= 5
+            % Only save figures 1 through 6
+            if num >= 1 && num <= 6
                 filename = sprintf('fig%d.fig', num);
                 fprintf('Saving handle %d to %s...\n', hFig.Number, filename);
                 
@@ -264,8 +308,8 @@ if save_figures_to_disk
 end
 
 %% Functions (Copied from CompactionChen.m)
-function [rho_final, req_power, total_passes, total_cycles, lc_avg_dynamic, total_energy_kWh, is_valid] = ...
-    run_compaction_sim(W_roller, b_roller, D_roller, m_eccentric, f, v_sim, mass_ratio, m_rov, target_relative_density, bounce_margin, h_layer, SOIL, eta_mech, nu, rho_min_lunar, rho_max_lunar, rho_i, Apad, n_rollers, c_f, g_moon)
+function [rho_final, total_avg_power_W, total_passes, total_cycles, lc_avg_dynamic, total_energy_kWh, is_valid] = ...
+    run_compaction_sim(W_roller, b_roller, D_roller, m_eccentric, f, v_sim, mass_ratio, m_rov, target_relative_density, bounce_margin, h_layer, SOIL, eta_mech, nu, rho_min_lunar, rho_max_lunar, rho_i, Apad, n_rollers, c_f, g_moon, P_hotel, battery_density_Wh_kg, max_battery_fraction, t_work_cycle_h)
     
     % Internal Initializations
     R_roller = D_roller / 2;
@@ -280,7 +324,7 @@ function [rho_final, req_power, total_passes, total_cycles, lc_avg_dynamic, tota
     % FAST FAIL: Bounce check
     if F0 >= (W_roller * bounce_margin)
         is_valid = false; 
-        rho_final = NaN; req_power = NaN; total_passes = NaN; total_cycles = NaN; lc_avg_dynamic = NaN; total_energy_kWh = NaN;
+        rho_final = NaN; total_avg_power_W = NaN; total_passes = NaN; total_cycles = NaN; lc_avg_dynamic = NaN; total_energy_kWh = NaN;
         return;
     end
     
@@ -298,27 +342,19 @@ function [rho_final, req_power, total_passes, total_cycles, lc_avg_dynamic, tota
     term2_fixed_part = (F0^2 * m_drum^2) / (m_total_wheel^2);
     % ----------------------------------------------
 
-    % Soil moduli functions (Earth-mapped density rho_e)
-    %MOVED TO FUNCTIONS SECTION FOR OPTIMIZATION (IT WAS SLOW ASF!)
-    % E_fun = @(rho_e) 6.498e-10 .* 1e6 .* exp(12.07.*rho_e);
-    % k_cr_fun =  @(rho_e) 5.686e12 * rho_e^(-41.58) + 0.9079;
-    % ks_fun = @(rho_e,rp) 2*rp * E_fun(rho_e) / (1-nu);
-    % ksu_fun = @(rho_e,rp,kcr) 2*rp * (kcr * E_fun(rho_e)) / (1-nu);
-
-
     % Loop trackers
     current_pass = 0;
     z_prev_pass = 0; 
     n_total = 0; %number of cycles
     sum_lc = 0; % for running sum
     
-    xcr_threshold = 0.15 * h_layer; %plastic deformation thresh.
+    xcr_threshold = 0.5 * h_layer; %plastic deformation thresh.
     is_valid = true;
     total_energy_Joule = 0; % Track cumulative work done
 
-    % Power Model
+    % Power Model (Vibration)
     KE_peak = (m_eccentric * omega)^2 / (2 * m_drum);
-    req_power = (KE_peak * f) / eta_mech;
+    req_vib_power = (KE_peak * f) / eta_mech;
 
     while rho < rho_f
         current_pass = current_pass + 1;
@@ -359,7 +395,12 @@ function [rho_final, req_power, total_passes, total_cycles, lc_avg_dynamic, tota
         % Calculate Work for this pass
         d_pass = Apad / b_roller; % Distance traveled per pass
         work_loco_pass = F_loco * d_pass; % Joules
-        total_energy_Joule = total_energy_Joule + work_loco_pass;
+        
+        t_pass = d_pass / v_sim; % Seconds driving
+        work_vib_pass = req_vib_power * t_pass; % Joules
+        work_hotel_pass = P_hotel * t_pass; % Joules
+        
+        total_energy_Joule = total_energy_Joule + work_loco_pass + work_vib_pass + work_hotel_pass;
         
         % 4. Recalculate rp_eff based on incremental sinkage
         [rp_eff, A_col, lc] = rp_fun(R_roller, b_roller, h_eff);
@@ -369,23 +410,16 @@ function [rho_final, req_power, total_passes, total_cycles, lc_avg_dynamic, tota
         for k = 1:cycles_in_pass
             n_total = n_total + 1;
             sum_lc = sum_lc + lc;
-            % lc_history(n_total) = lc;
             
-            % --- INLINED PHYSICS (From: translate_density, k_cr_fun, ks_fun, ksu_fun, Pb logic) ---
-            % 1. Inline translate_density
+            % --- INLINED PHYSICS ---
             rho_e = 1.63 + (rho - 1.27) * rho_slope;
             if rho_e < 1.63, rho_e = 1.63; elseif rho_e > 2.15, rho_e = 2.15; end
-            
-            % 2. Inline Pb calculation (Soil density functions)
             Pb = 0.07932 * (100*rho_e - 184)^2 * (A_col * A_chen_inv);
-
-            % 3. Inline Moduli (ks, ksu from ks_fun, ksu_fun, E_fun, k_cr_fun)
             E_val = E_mult * exp(12.07 * rho_e);
             kcr = 5.686e12 * rho_e^(-41.58) + 0.9079;
             ks = (2 * rp_eff * E_val) / nu_term;
             ksu = ks * kcr;
 
-            % 4. Inline Residual Deformation (From: chen_residual_deformation)
             if F0 <= Pb
                 xcr = 0;
             else
@@ -394,9 +428,8 @@ function [rho_final, req_power, total_passes, total_cycles, lc_avg_dynamic, tota
                 xcr = term1_xcr * term2_xcr + (Pb/ks - Pb/ksu);
                 xcr = max(0, xcr);
             end
-            % ----------------------------------------------------------------------------------
+            % -----------------------
 
-            % Sanity Checks
             if xcr > xcr_threshold
                 is_valid = false;
                 break;
@@ -411,16 +444,10 @@ function [rho_final, req_power, total_passes, total_cycles, lc_avg_dynamic, tota
                 rho = rho * (h_layer / h_layer_new);
                 h_layer = h_layer_new;
             end
-            
             if rho >= rho_f, break; end
         end
         
-        % Add vibratory work for the pass
-        t_pass = d_pass / v_sim; % Seconds driving
-        work_vib_pass = req_power * t_pass; % Joules
-        total_energy_Joule = total_energy_Joule + work_vib_pass;
-
-        % Fail early if this pass made no progress (prevents infinite loops/slow hangs)
+        % Fail early if this pass made no progress
         if rho <= rho_before_pass
             is_valid = false;
             break;
@@ -431,17 +458,33 @@ function [rho_final, req_power, total_passes, total_cycles, lc_avg_dynamic, tota
         z_prev_pass = z_current;
     end
 
+    % --- BATTERY MASS SANITY CHECK ---
+    if is_valid
+        total_active_time_sec = current_pass * (Apad / b_roller) / v_sim;
+        total_avg_power_W = total_energy_Joule / total_active_time_sec;
+        
+        % Size battery mass based on work cycle
+        energy_per_cycle_Wh = total_avg_power_W * t_work_cycle_h;
+        m_battery = energy_per_cycle_Wh / battery_density_Wh_kg; % kg
+        
+        m_non_roller = m_rov - (W_roller * n_rollers / g_moon);
+        max_m_battery = m_non_roller * max_battery_fraction;
+        
+        if m_battery > max_m_battery
+            is_valid = false;
+        end
+    end
+
     % NaN Mapping for Failures
     if is_valid
         rho_final = rho;
         total_passes = current_pass;
         total_cycles = n_total;
-        % lc_avg_dynamic = mean(lc_history);
         lc_avg_dynamic = sum_lc / n_total;
         total_energy_kWh = total_energy_Joule / 3.6e6; % Convert J to kWh
     else
         rho_final = NaN;
-        req_power = NaN;
+        total_avg_power_W = NaN;
         total_passes = NaN;
         total_cycles = NaN;
         lc_avg_dynamic = NaN;
