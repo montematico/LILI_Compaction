@@ -201,73 +201,20 @@ else
     pareto_radius = R_ROLLER_grid(pareto_idx);
     
     % Figure 1: 2D Pareto Front Scatter
-    figure('Name', 'Pareto Front: Mass vs. Pad Energy');
-    scatter(M_ROV_grid(valid_idx), Energy_results(valid_idx), 80, M_RATIO_grid(valid_idx), 'filled');
+    figure('Name', 'Pareto Front: Mass vs. Mission Time');
+    scatter(M_ROV_grid(valid_idx), Time_results(valid_idx), 80, M_RATIO_grid(valid_idx), 'filled');
+    hold on;
+    scatter(M_ROV_grid(pareto_idx), Time_results(pareto_idx), 120, 'r', 'LineWidth', 2);
     
     xlabel('Total Rover Mass (kg)');
-    ylabel('Pad Energy (kWh)');
+    ylabel('Total Mission Time (hr)');
     grid on;
-    title('Trade Space: Total Mass vs. Pad Energy');
+    title('Trade Space: Total Mass vs. Mission Time (Mass Ratio Color)');
     colormap(flipud(parula));
     h = colorbar;
     ylabel(h, 'Mass Ratio');
+    hold off;
 
-    % Figure 2: Feasibility Map (Frequency vs Mass)
-    figure('Name', 'Pareto Optimal Configurations');
-    scatter(F_grid(pareto_idx), M_ROV_grid(pareto_idx), 80, M_RATIO_grid(pareto_idx), '^', 'filled');
-    xlabel('Frequency (Hz)');
-    ylabel('Total Rover Mass (kg)');
-    title('Pareto Optimal Configurations in Frequency vs Mass Space');
-    grid on;
-    h2 = colorbar; 
-    ylabel(h2, 'Mass Ratio');
-
-    % Figure 3: Pareto Table
-    figure('Name', 'Pareto Optimal Set');
-    tbl_data_points = [
-        M_ROV_grid(pareto_idx), ...
-        M_RATIO_grid(pareto_idx), ...
-        R_ROLLER_grid(pareto_idx), ...
-        F_grid(pareto_idx), ...
-        M_ECC_grid(pareto_idx), ...
-        Time_results(pareto_idx), ...
-        Energy_results(pareto_idx), ...
-        Power_results(pareto_idx)
-    ];
-    
-    [~, sort_order] = sort(tbl_data_points(:,1), 'ascend'); % Sort by Total Mass
-    tbl_data = tbl_data_points(sort_order, :);
-    
-    cnames = {'Total_Mass_kg', 'Mass_Ratio', 'Radius_m', 'Freq_Hz', 'Ecc_Mom_kg_m', 'Pad_Time_hr', 'Energy_kWh', 'Total_Power_W'};
-    T_pareto = array2table(tbl_data, 'VariableNames', cnames);
-    t = uitable('Data', T_pareto, 'Units', 'Normalized', 'Position', [0, 0, 1, 1]);
-    t.ColumnSortable = true; %allow sorting of columns
-    
-    % Figure 4: Parallel Coordinates Plot
-    figure('Name', 'Parallel Coordinates: Trade Space', 'Position', [100, 100, 1000, 500]);
-    pareto_table = table(real(F_grid(pareto_idx)), real(M_ECC_grid(pareto_idx)), real(M_ROV_grid(pareto_idx)), real(R_ROLLER_grid(pareto_idx)), real(M_RATIO_grid(pareto_idx)), real(Energy_results(pareto_idx)), ...
-        'VariableNames', {'Freq_Hz', 'Ecc_Moment', 'Rover_Mass', 'Radius_m', 'Mass_Ratio', 'Energy_kWh'});
-    
-    p = parallelplot(pareto_table);
-    try
-        p.ColorVariable = 'Energy_kWh';
-        p.LineAlpha = 0.4; 
-    catch
-    end
-    title('Parallel Coordinates: Pareto Optimal Configurations');
-
-    % Figure 5: 3D Pareto Front: Mass, Energy, and Roller Radius
-    figure('Name', '3D Pareto Front: Mass, Energy, and Roller Radius');
-    pareto_radius = R_ROLLER_grid(pareto_idx);
-    scatter3(pareto_m_rov, pareto_energy, pareto_radius, 80, pareto_mass_ratios, 'filled');
-    xlabel('Total Rover Mass (kg)');
-    ylabel('Pad Energy (kWh)');
-    zlabel('Roller Radius (m)');
-    grid on;
-    title('3D Pareto Front: Mass, Energy, and Roller Radius');
-    h3 = colorbar;
-    ylabel(h3, 'Mass Ratio');
-    view(45, 30);
     % Figure 6: Trade Space - Mass vs. Time (Energy Color)
     figure('Name', 'Trade Space: Mass vs. Time (Energy)');
     scatter(M_ROV_grid(valid_idx), Time_results(valid_idx), 80, Energy_results(valid_idx), 'filled', 'MarkerEdgeColor', 'k');
@@ -282,29 +229,6 @@ else
     h6 = colorbar;
     ylabel(h6, 'Total Energy (kWh)');
     hold off;
-end
-
-%% 6. Save Figures as .fig (Overwrite Existing)
-if save_figures_to_disk
-    % This finds all open figures and saves them based on their figure number
-    fig_handles = findall(0, 'Type', 'figure');
-
-    for k = 1:length(fig_handles)
-        hFig = fig_handles(k);
-        if isvalid(hFig)
-            num = hFig.Number;
-            
-            % Only save figures 1 through 6
-            if num >= 1 && num <= 6
-                filename = sprintf('fig%d.fig', num);
-                fprintf('Saving handle %d to %s...\n', hFig.Number, filename);
-                
-                % 'saveas' will overwrite by default if the file exists
-                saveas(hFig, filename);
-            end
-        end
-    end
-    fprintf('All figures saved successfully.\n');
 end
 
 %% Functions (Copied from CompactionChen.m)
