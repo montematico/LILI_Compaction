@@ -62,6 +62,7 @@ Passes_results = nan(size(F_grid));
 Cycles_results = nan(size(F_grid));
 Energy_results = nan(size(F_grid));
 Time_results = nan(size(F_grid));
+Max_Traction_results = nan(size(F_grid));
 Valid_mask = false(size(F_grid));
 
 if dry_run
@@ -79,6 +80,7 @@ if dry_run
     Cycles_results = nan(size(F_grid));
     Energy_results = nan(size(F_grid));
     Time_results = nan(size(F_grid));
+    Max_Traction_results = nan(size(F_grid));
     Valid_mask = false(size(F_grid));
 end
 
@@ -120,7 +122,7 @@ parfor i = 1:numel(F_grid)
     W_roller = (m_rov * g_moon * roller_fraction) / n_rollers;
     
     % Call the simulation function (Updated with battery and hotel power)
-    [rho_final, total_avg_power_W, total_passes, total_cycles, lc_avg_dynamic, total_energy_kWh, is_valid] = ...
+    [rho_final, total_avg_power_W, total_passes, total_cycles, lc_avg_dynamic, total_energy_kWh, is_valid, max_F_loco] = ...
         run_compaction_sim(W_roller, b_roller, D_roller, m_eccentric, f, v_sim, mass_ratio, m_rov, ...
         target_relative_density, bounce_margin, h_layer, SOIL, eta_mech, nu, rho_min_lunar, rho_max_lunar, rho_i, ...
         Apad, n_rollers, c_f, g_moon, P_hotel, battery_density_Wh_kg, max_battery_fraction, t_work_cycle_h);
@@ -156,6 +158,7 @@ parfor i = 1:numel(F_grid)
         Cycles_results(i) = total_cycles;
         Energy_results(i) = total_energy_kWh;
         Time_results(i) = total_time_hours;
+        Max_Traction_results(i) = max_F_loco;
         Valid_mask(i) = true;
         success_count = success_count + 1;
     end
@@ -194,6 +197,30 @@ else
     
     fprintf('Found %d Pareto-optimal points.\n', length(pareto_idx));
 
+    % 1. Calculate Area Rates
+    b_roller = 0.3; % Fixed width
+    net_area_rate = v_sim * b_roller;
+    gross_area_rates = Apad ./ (Time_results(pareto_idx) * 3600);
+    
+    % 2. Extract Pareto vectors for stats
+    pareto_max_traction = Max_Traction_results(pareto_idx);
+    pareto_radius = R_ROLLER_grid(pareto_idx);
+    pareto_m_rov = M_ROV_grid(pareto_idx);
+    pareto_mass_ratios = M_RATIO_grid(pareto_idx);
+
+    % 3. Print Summary Table
+    fprintf('\n================ PARETO OPTIMAL SUMMARY (N=%d) ================\n', length(pareto_idx));
+    fprintf('%-25s | %-10s | %-10s | %-10s\n', 'Variable', 'Mean', 'Min', 'Max');
+    fprintf('---------------------------------------------------------------\n');
+    fprintf('%-25s | %-10.2f | %-10.2f | %-10.2f\n', 'Max Traction Force (N)', mean(pareto_max_traction), min(pareto_max_traction), max(pareto_max_traction));
+    fprintf('%-25s | %-10.3f | %-10.3f | %-10.3f\n', 'Roller Radius (m)', mean(pareto_radius), min(pareto_radius), max(pareto_radius));
+    fprintf('%-25s | %-10.1f | %-10.1f | %-10.1f\n', 'Total Rover Mass (kg)', mean(pareto_m_rov), min(pareto_m_rov), max(pareto_m_rov));
+    fprintf('%-25s | %-10.2f | %-10.2f | %-10.2f\n', 'Mass Ratio', mean(pareto_mass_ratios), min(pareto_mass_ratios), max(pareto_mass_ratios));
+    fprintf('%-25s | %-10.4f | %-10.4f | %-10.4f\n', 'Gross Area Rate (m^2/s)', mean(gross_area_rates), min(gross_area_rates), max(gross_area_rates));
+    fprintf('---------------------------------------------------------------\n');
+    fprintf('Constant Net Area Rate: %.4f m^2/s\n', net_area_rate);
+    fprintf('===============================================================\n\n');
+
     %% 5. Graphics and Plots
     pareto_m_rov = M_ROV_grid(pareto_idx);
     pareto_energy = Energy_results(pareto_idx);
@@ -209,10 +236,24 @@ else
     xlabel('Total Rover Mass (kg)');
     ylabel('Total Mission Time (hr)');
     grid on;
-    title('Trade Space: Total Mass vs. Mission Time (Mass Ratio Color)');
+    title('Total Mass vs. Mission Time (Mass Ratio Color)');
     colormap(flipud(parula));
     h = colorbar;
     ylabel(h, 'Mass Ratio');
+    hold off;
+
+    % Figure 2: Traction Requirements
+    figure('Name', 'Traction Requirements');
+    scatter(M_ROV_grid(valid_idx), Time_results(valid_idx), 80, Max_Traction_results(valid_idx), 'filled');
+    hold on;
+    scatter(M_ROV_grid(pareto_idx), Time_results(pareto_idx), 120, 'r', 'LineWidth', 2);
+    xlabel('Total Rover Mass (kg)');
+    ylabel('Total Mission Time (hr)');
+    title('Traction Requirement: Mass vs. Time (Traction Force Color)');
+    grid on;
+    h2 = colorbar;
+    ylabel(h2, 'Max Traction Force (N)');
+    legend('Feasible Designs', 'Pareto Optimal Front');
     hold off;
 
     % Figure 6: Trade Space - Mass vs. Time (Energy Color)
@@ -223,7 +264,7 @@ else
     xlabel('Total Rover Mass (kg)');
     ylabel('Total Mission Time (hr)');
     grid on;
-    title('Trade Space: Total Mass vs. Mission Time');
+    title('Total Mass vs. Mission Time (Energy Color)');
     legend('Feasible Designs', 'Pareto Optimal Front');
     colormap(turbo);
     h6 = colorbar;
@@ -232,10 +273,11 @@ else
 end
 
 %% Functions (Copied from CompactionChen.m)
-function [rho_final, total_avg_power_W, total_passes, total_cycles, lc_avg_dynamic, total_energy_kWh, is_valid] = ...
+function [rho_final, total_avg_power_W, total_passes, total_cycles, lc_avg_dynamic, total_energy_kWh, is_valid, max_F_loco] = ...
     run_compaction_sim(W_roller, b_roller, D_roller, m_eccentric, f, v_sim, mass_ratio, m_rov, target_relative_density, bounce_margin, h_layer, SOIL, eta_mech, nu, rho_min_lunar, rho_max_lunar, rho_i, Apad, n_rollers, c_f, g_moon, P_hotel, battery_density_Wh_kg, max_battery_fraction, t_work_cycle_h)
     
     % Internal Initializations
+    max_F_loco = 0;
     R_roller = D_roller / 2;
     omega = 2 * pi * f;
     
@@ -315,6 +357,7 @@ function [rho_final, total_avg_power_W, total_passes, total_cycles, lc_avg_dynam
         R_b = term1_b * term2_b + term3_b + term4_b; 
         
         F_loco = R_r + R_c + R_b; % Total forward force required
+        max_F_loco = max(max_F_loco, F_loco);
         
         % Calculate Work for this pass
         d_pass = Apad / b_roller; % Distance traveled per pass
@@ -413,6 +456,7 @@ function [rho_final, total_avg_power_W, total_passes, total_cycles, lc_avg_dynam
         total_cycles = NaN;
         lc_avg_dynamic = NaN;
         total_energy_kWh = NaN;
+        max_F_loco = NaN;
     end
 end
 
