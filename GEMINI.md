@@ -10,8 +10,6 @@ Your workspace is restricted to this folder: `C:\Users\monte\OneDrive - Universi
 5. **Verification** When editing matlab scripts run them before hand to verify expected output and that no errors have occured. If an error occurs correct it.
 
 # Tool Instructions
-- **To Run a Script:** Use `matlab -batch "run('filename.m')"`
-- **To Run with Figures:** Use `matlab -nodesktop -nosplash -r "run('filename.m'); pause(5); exit;"`
 - **Fast Verification:** Many scripts include a `dry_run = true;` flag at the top. Enable this to test logic and plotting on a small subset of data (e.g., 10 iterations) before performing a full sweep.
 - **Error Handling:** If a script fails, read the error log and propose a fix in the `.m` file immediately.
 

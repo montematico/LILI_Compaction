@@ -9,7 +9,7 @@ energy_max_kWh = 400;
 target_relative_density = 0.85;
 roller_fraction = 0.5;
 n_rollers   = 2;
-bounce_margin = 1.2;
+bounce_margin = 1.8; %apparently this is fine
 h_layer  = 0.12; %depth of layer being compacted
 v_sim = 0.05;
 save_figures_to_disk = false; %Save .fig files
@@ -31,8 +31,8 @@ SOIL.c     = 170;    % N/m^2
 
 % Locomotion and Dense Soil Parameters
 c_f = 0.05;                % Coefficient of rolling friction
-SOIL.kc_dense   = SOIL.kc*5;    % N/m^2 (Assumed 5x "loose" state)
-SOIL.kphi_dense = SOIL.kphi*5; % N/m^3 (Assumed 5x "loose" state)
+SOIL.kc_dense   = SOIL.kc*1.5;    % N/m^2 (Assumed 5x "loose" state)
+SOIL.kphi_dense = SOIL.kphi*1.5; % N/m^3 (Assumed 5x "loose" state)
 SOIL.K_c = 33.37;          % Terzaghi cohesive modulus for lunar soil
 SOIL.K_gamma = 72.77;      % Terzaghi frictional modulus for lunar soil
 
