@@ -4,7 +4,7 @@ clear updateProgress;
 %% 1. Constants and Setup
 g_moon   = 1.62;      % m/s^2
 Apad     = 500;       % m^2
-Tavail_h = 4380;    % hours, total allowed compaction time for 1 pad - 6mon
+Tavail_h = 1000;    % hours, total allowed compaction time for 1 pad - 6mon
 energy_max_kWh = 400;
 target_relative_density = 0.85;
 roller_fraction = 0.5;
@@ -12,6 +12,7 @@ n_rollers   = 2;
 bounce_margin = 1.8; %apparently this is fine
 h_layer  = 0.12; %depth of layer being compacted
 v_sim = 0.05;
+max_sinkage_ratio = 1.0; % Max allowable sinkage as a fraction of roller radius
 save_figures_to_disk = false; %Save .fig files
 dry_run = false; % Set to true to run only 10 combinations for testing
 P_hotel = 100; % Watts, baseline power
@@ -125,7 +126,7 @@ parfor i = 1:numel(F_grid)
     [rho_final, total_avg_power_W, total_passes, total_cycles, lc_avg_dynamic, total_energy_kWh, is_valid, max_F_loco] = ...
         run_compaction_sim(W_roller, b_roller, D_roller, m_eccentric, f, v_sim, mass_ratio, m_rov, ...
         target_relative_density, bounce_margin, h_layer, SOIL, eta_mech, nu, rho_min_lunar, rho_max_lunar, rho_i, ...
-        Apad, n_rollers, c_f, g_moon, P_hotel, battery_density_Wh_kg, max_battery_fraction, t_work_cycle_h);
+        Apad, n_rollers, c_f, g_moon, P_hotel, battery_density_Wh_kg, max_battery_fraction, t_work_cycle_h, max_sinkage_ratio);
     
     %Time and power sanity check
     if is_valid
@@ -227,7 +228,7 @@ end
 
 %% Functions (Copied from CompactionChen.m)
 function [rho_final, total_avg_power_W, total_passes, total_cycles, lc_avg_dynamic, total_energy_kWh, is_valid, max_F_loco] = ...
-    run_compaction_sim(W_roller, b_roller, D_roller, m_eccentric, f, v_sim, mass_ratio, m_rov, target_relative_density, bounce_margin, h_layer, SOIL, eta_mech, nu, rho_min_lunar, rho_max_lunar, rho_i, Apad, n_rollers, c_f, g_moon, P_hotel, battery_density_Wh_kg, max_battery_fraction, t_work_cycle_h)
+    run_compaction_sim(W_roller, b_roller, D_roller, m_eccentric, f, v_sim, mass_ratio, m_rov, target_relative_density, bounce_margin, h_layer, SOIL, eta_mech, nu, rho_min_lunar, rho_max_lunar, rho_i, Apad, n_rollers, c_f, g_moon, P_hotel, battery_density_Wh_kg, max_battery_fraction, t_work_cycle_h, max_sinkage_ratio)
     
     % Internal Initializations
     max_F_loco = 0;
@@ -292,6 +293,10 @@ function [rho_final, total_avg_power_W, total_passes, total_cycles, lc_avg_dynam
         
         % 3. Calculate Locomotion Resistances for this pass
         z_safe = max(z_current, 1e-6); % Prevent div-by-zero in bulldozing
+        if z_safe >= (R_roller * max_sinkage_ratio)
+            is_valid = false;
+            break;
+        end
         
         % Clamp the argument to [-1, 1] to prevent imaginary angles if sinkage exceeds wheel radius
         alpha_arg = max(-1, min(1, 1 - 2*z_safe/D_roller));
