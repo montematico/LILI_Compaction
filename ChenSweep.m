@@ -13,7 +13,7 @@ bounce_margin = 1.8; %apparently this is fine
 h_layer  = 0.12; %depth of layer being compacted
 v_sim = 0.05;
 save_figures_to_disk = false; %Save .fig files
-dry_run = false; % Set to true to run only 10 combinations for testing
+dry_run = true; % Set to true to run only 10 combinations for testing
 P_hotel = 100; % Watts, baseline power
 battery_density_Wh_kg = 150; % Wh/kg
 max_battery_fraction = 0.8; % Max mass fraction for battery
@@ -67,11 +67,11 @@ Valid_mask = false(size(F_grid));
 
 if dry_run
     fprintf('DRY RUN ENABLED: Slicing grid to first 10 combinations.\n');
-    F_grid = F_grid(1:min(10, end));
-    M_ECC_grid = M_ECC_grid(1:min(10, end));
-    M_ROV_grid = M_ROV_grid(1:min(10, end));
-    M_RATIO_grid = M_RATIO_grid(1:min(10, end));
-    R_ROLLER_grid = R_ROLLER_grid(1:min(10, end));
+    F_grid = F_grid(1:min(100, end));
+    M_ECC_grid = M_ECC_grid(1:min(100, end));
+    M_ROV_grid = M_ROV_grid(1:min(100, end));
+    M_RATIO_grid = M_RATIO_grid(1:min(100, end));
+    R_ROLLER_grid = R_ROLLER_grid(1:min(100, end));
     
     % Re-initialize results arrays for sliced grid
     Rho_results = nan(size(F_grid));
@@ -85,17 +85,19 @@ if dry_run
 end
 
 % Parpool setup
-% poolobj = gcp('nocreate'); 
-% if isempty(poolobj)
-%     localCluster = parcluster('local'); 
-% 
-%     % Request exactly 14 independent process workers.
-%     % This maps 1-to-1 with your physical cores and prevents RAM exhaustion.
-%     num_workers = min(14, localCluster.NumWorkers); 
-% 
-%     fprintf('Starting optimized process pool with %d workers...\n', num_workers);
-%     parpool(localCluster, num_workers); 
-% end
+if ~dry_run
+    poolobj = gcp('nocreate'); 
+    if isempty(poolobj)
+        localCluster = parcluster('local'); 
+        % Request exactly 14 independent process workers.
+        num_workers = min(14, localCluster.NumWorkers); 
+        fprintf('Starting optimized process pool with %d workers...\n', num_workers);
+        parpool(localCluster, num_workers); 
+    else
+        fprintf('Using existing parallel pool with %d workers.\n', poolobj.NumWorkers);
+    end
+end
+
 % 1. Set up the DataQueue
 D = parallel.pool.DataQueue;
 % 2. Define total iterations for percentage calculation
@@ -108,67 +110,36 @@ fprintf('Running simulation for %d combinations...\n', numel(F_grid));
 success_count = 0;
 
 tic
-parfor i = 1:numel(F_grid)
-    % Extract current iteration's parameters
-    f = F_grid(i);
-    m_eccentric = M_ECC_grid(i);
-    m_rov = M_ROV_grid(i);
-    mass_ratio = M_RATIO_grid(i);
-    R_roller = R_ROLLER_grid(i);
-    
-    % Derived parameters
-    D_roller = R_roller * 2;
-    b_roller = 0.3; % Fixed width
-    W_roller = (m_rov * g_moon * roller_fraction) / n_rollers;
-    
-    % Call the simulation function (Updated with battery and hotel power)
-    [rho_final, total_avg_power_W, total_passes, total_cycles, lc_avg_dynamic, total_energy_kWh, is_valid, max_F_loco] = ...
-        run_compaction_sim(W_roller, b_roller, D_roller, m_eccentric, f, v_sim, mass_ratio, m_rov, ...
-        target_relative_density, bounce_margin, h_layer, SOIL, eta_mech, nu, rho_min_lunar, rho_max_lunar, rho_i, ...
-        Apad, n_rollers, c_f, g_moon, P_hotel, battery_density_Wh_kg, max_battery_fraction, t_work_cycle_h);
-    
-    %Time and power sanity check
-    if is_valid
-        % 1. Calculate final pad mission time including recharge cycles
-        distance_to_cover_pad = Apad / b_roller; 
-        time_per_pass_seconds = distance_to_cover_pad / v_sim;
-        total_active_time_hours = (total_passes * time_per_pass_seconds) / 3600;
-        
-        charge_cycles = max(0, ceil(total_active_time_hours / t_work_cycle_h) - 1);
-        total_time_hours = total_active_time_hours + (charge_cycles * t_charge_cycle_h);
-        
-        % 2. Apply Sanity Filters
-        if total_time_hours > Tavail_h || total_energy_kWh > energy_max_kWh
-            is_valid = false; % Discard if it takes too long or uses too much energy
-        end
-    end
+if dry_run
+    % Use standard for-loop for dry_run to avoid parallel overhead
+    for i = 1:numel(F_grid)
+        [Rho_results(i), Power_results(i), Passes_results(i), Cycles_results(i), ...
+         lc_avg_dynamic, Energy_results(i), Valid_mask(i), Max_Traction_results(i), Time_results(i)] = ...
+            run_loop_body(i, F_grid, M_ECC_grid, M_ROV_grid, M_RATIO_grid, R_ROLLER_grid, ...
+            roller_fraction, n_rollers, g_moon, target_relative_density, bounce_margin, h_layer, ...
+            SOIL, eta_mech, nu, rho_min_lunar, rho_max_lunar, rho_i, Apad, v_sim, P_hotel, ...
+            battery_density_Wh_kg, max_battery_fraction, t_work_cycle_h, t_charge_cycle_h, Tavail_h, energy_max_kWh);
 
-    if is_valid && ~isnan(rho_final)
-        % Pad Energy & Time Calculation (Repeat logic for storage)
-        distance_to_cover_pad = Apad / b_roller; 
-        time_per_pass_seconds = distance_to_cover_pad / v_sim;
-        total_active_time_hours = (total_passes * time_per_pass_seconds) / 3600;
-        charge_cycles = max(0, ceil(total_active_time_hours / t_work_cycle_h) - 1);
-        total_time_hours = total_active_time_hours + (charge_cycles * t_charge_cycle_h);
+        if Valid_mask(i), success_count = success_count + 1; end
+        if mod(i, 10) == 0, updateProgress(total_iters, i); end
+    end
+else
+    % Use parfor for full sweeps
+    parfor i = 1:numel(F_grid)
+        [Rho_results(i), Power_results(i), Passes_results(i), Cycles_results(i), ...
+         ~, Energy_results(i), Valid_mask(i), Max_Traction_results(i), Time_results(i)] = ...
+            run_loop_body(i, F_grid, M_ECC_grid, M_ROV_grid, M_RATIO_grid, R_ROLLER_grid, ...
+            roller_fraction, n_rollers, g_moon, target_relative_density, bounce_margin, h_layer, ...
+            SOIL, eta_mech, nu, rho_min_lunar, rho_max_lunar, rho_i, Apad, v_sim, P_hotel, ...
+            battery_density_Wh_kg, max_battery_fraction, t_work_cycle_h, t_charge_cycle_h, Tavail_h, energy_max_kWh);
         
-        % Store successful results
-        Rho_results(i) = rho_final;
-        Power_results(i) = total_avg_power_W;
-        Passes_results(i) = total_passes;
-        Cycles_results(i) = total_cycles;
-        Energy_results(i) = total_energy_kWh;
-        Time_results(i) = total_time_hours;
-        Max_Traction_results(i) = max_F_loco;
-        Valid_mask(i) = true;
-        success_count = success_count + 1;
+        if mod(i, 50) == 0, send(D, i); end
     end
-    %Intermittent Status updates
-    if mod(i, 50) == 0
-        send(D,i);
-    end
+    success_count = sum(Valid_mask);
 end
 fprintf('Sweep complete. Successes: %d\n\n', success_count);
 toc
+
 %% 4. Pareto Optimization
 valid_idx = find(Valid_mask);
 if isempty(valid_idx)
@@ -181,7 +152,7 @@ else
     f_vec = F_grid(valid_idx);
     
     % 4-Objective Matrix: [Minimize Mass, Minimize Energy, Maximize Ratio, Target 50Hz]
-    objectives = [m_rov_vec, energy_vec, 1./mass_ratio_vec, abs(f_vec - 50)];
+    objectives = [m_rov_vec(:), energy_vec(:), 1./mass_ratio_vec(:), abs(f_vec(:) - 50)];
     
     % Find the non-dominated set (Pareto Front)
     is_pareto = true(length(valid_idx), 1);
@@ -221,55 +192,8 @@ else
     fprintf('Constant Net Area Rate: %.4f m^2/s\n', net_area_rate);
     fprintf('===============================================================\n\n');
 
-    %% 5. Graphics and Plots
-    pareto_m_rov = M_ROV_grid(pareto_idx);
-    pareto_energy = Energy_results(pareto_idx);
-    pareto_mass_ratios = M_RATIO_grid(pareto_idx);
-    pareto_radius = R_ROLLER_grid(pareto_idx);
-    
-    % Figure 1: 2D Pareto Front Scatter
-    figure('Name', 'Pareto Front: Mass vs. Mission Time');
-    scatter(M_ROV_grid(valid_idx), Time_results(valid_idx), 80, M_RATIO_grid(valid_idx), 'filled');
-    hold on;
-    scatter(M_ROV_grid(pareto_idx), Time_results(pareto_idx), 120, 'r', 'LineWidth', 2);
-    
-    xlabel('Total Rover Mass (kg)');
-    ylabel('Total Mission Time (hr)');
-    grid on;
-    title('Total Mass vs. Mission Time (Mass Ratio Color)');
-    colormap(flipud(parula));
-    h = colorbar;
-    ylabel(h, 'Mass Ratio');
-    hold off;
-
-    % Figure 2: Traction Requirements
-    figure('Name', 'Traction Requirements');
-    scatter(M_ROV_grid(valid_idx), Time_results(valid_idx), 80, Max_Traction_results(valid_idx), 'filled');
-    hold on;
-    scatter(M_ROV_grid(pareto_idx), Time_results(pareto_idx), 120, 'r', 'LineWidth', 2);
-    xlabel('Total Rover Mass (kg)');
-    ylabel('Total Mission Time (hr)');
-    title('Traction Requirement: Mass vs. Time (Traction Force Color)');
-    grid on;
-    h2 = colorbar;
-    ylabel(h2, 'Max Traction Force (N)');
-    legend('Feasible Designs', 'Pareto Optimal Front');
-    hold off;
-
-    % Figure 6: Trade Space - Mass vs. Time (Energy Color)
-    figure('Name', 'Trade Space: Mass vs. Time (Energy)');
-    scatter(M_ROV_grid(valid_idx), Time_results(valid_idx), 80, Energy_results(valid_idx), 'filled', 'MarkerEdgeColor', 'k');
-    hold on;
-    scatter(M_ROV_grid(pareto_idx), Time_results(pareto_idx), 120, 'r', 'LineWidth', 2); % Red circles around the 'best' points
-    xlabel('Total Rover Mass (kg)');
-    ylabel('Total Mission Time (hr)');
-    grid on;
-    title('Total Mass vs. Mission Time (Energy Color)');
-    legend('Feasible Designs', 'Pareto Optimal Front');
-    colormap(turbo);
-    h6 = colorbar;
-    ylabel(h6, 'Total Energy (kWh)');
-    hold off;
+    save('LunarCompactionResults.mat');
+    plot_compaction_results('LunarCompactionResults.mat');
 end
 
 %% Functions (Copied from CompactionChen.m)
@@ -505,13 +429,62 @@ function ks = ks_fun(rho_e,rp,nu); ks = 2*rp * E_fun(rho_e) / (1-nu); end
 function ksu = ksu_fun(rho_e,rp,kcr,nu); ksu = 2*rp * (kcr * E_fun(rho_e)) / (1-nu); end
 
 
-function updateProgress(total)
-    persistent count
-    if isempty(count)
-        count = 0;
+function [rho_res, pow_res, pass_res, cyc_res, lc_avg, en_res, valid, traction, time_res] = ...
+    run_loop_body(i, F_grid, M_ECC_grid, M_ROV_grid, M_RATIO_grid, R_ROLLER_grid, ...
+    roller_fraction, n_rollers, g_moon, target_relative_density, bounce_margin, h_layer, ...
+    SOIL, eta_mech, nu, rho_min_lunar, rho_max_lunar, rho_i, Apad, v_sim, P_hotel, ...
+    battery_density_Wh_kg, max_battery_fraction, t_work_cycle_h, t_charge_cycle_h, Tavail_h, energy_max_kWh)
+    
+    % Extract current iteration's parameters
+    f = F_grid(i);
+    m_eccentric = M_ECC_grid(i);
+    m_rov = M_ROV_grid(i);
+    mass_ratio = M_RATIO_grid(i);
+    R_roller = R_ROLLER_grid(i);
+    
+    % Derived parameters
+    D_roller = R_roller * 2;
+    b_roller = 0.3; % Fixed width
+    W_roller = (m_rov * g_moon * roller_fraction) / n_rollers;
+    
+    % Call the simulation function
+    [rho_res, total_avg_power_W, total_passes, total_cycles, lc_avg, total_energy_kWh, valid, traction] = ...
+        run_compaction_sim(W_roller, b_roller, D_roller, m_eccentric, f, v_sim, mass_ratio, m_rov, ...
+        target_relative_density, bounce_margin, h_layer, SOIL, eta_mech, nu, rho_min_lunar, rho_max_lunar, rho_i, ...
+        Apad, n_rollers, 0.05, g_moon, P_hotel, battery_density_Wh_kg, max_battery_fraction, t_work_cycle_h);
+    
+    if valid
+        % Time and power sanity check
+        distance_to_cover_pad = Apad / b_roller; 
+        time_per_pass_seconds = distance_to_cover_pad / v_sim;
+        total_active_time_hours = (total_passes * time_per_pass_seconds) / 3600;
+        charge_cycles = max(0, ceil(total_active_time_hours / t_work_cycle_h) - 1);
+        time_res = total_active_time_hours + (charge_cycles * t_charge_cycle_h);
+        
+        if time_res > Tavail_h || total_energy_kWh > energy_max_kWh
+            valid = false;
+        end
+        
+        if valid
+            pow_res = total_avg_power_W;
+            pass_res = total_passes;
+            cyc_res = total_cycles;
+            en_res = total_energy_kWh;
+        else
+            rho_res = NaN; pow_res = NaN; pass_res = NaN; cyc_res = NaN; lc_avg = NaN; en_res = NaN; traction = NaN; time_res = NaN;
+        end
+    else
+        rho_res = NaN; pow_res = NaN; pass_res = NaN; cyc_res = NaN; lc_avg = NaN; en_res = NaN; traction = NaN; time_res = NaN;
     end
-    count = count + 50;
-    pct = (count / total) * 100;
-    % Use \r to overwrite the line for a cleaner look
-    fprintf('Progress: %.2f%% (%d of %d)\r', pct, count, total);
+end
+
+function updateProgress(total, current)
+    if nargin < 2
+        persistent count
+        if isempty(count), count = 0; end
+        count = count + 50;
+        current = count;
+    end
+    pct = (current / total) * 100;
+    fprintf('Progress: %.2f%% (%d of %d)\r', pct, current, total);
 end
