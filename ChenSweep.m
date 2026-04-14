@@ -7,7 +7,7 @@ Apad     = 500;       % m^2
 Tavail_h = 1000;    % hours, total allowed compaction time for 1 pad - 6mon
 energy_max_kWh = 400;
 target_relative_density = 0.85;
-roller_fraction = 0.5;
+roller_fraction = 0.3;
 n_rollers   = 2;
 bounce_margin = 1.8; %apparently this is fine
 h_layer  = 0.12; %depth of layer being compacted
@@ -15,7 +15,7 @@ v_sim = 0.05;
 max_sinkage_ratio = 1.0; % Max allowable sinkage as a fraction of roller radius
 save_figures_to_disk = false; %Save .fig files
 dry_run = false; % Set to true to run only 10 combinations for testing
-P_hotel = 100; % Watts, baseline power
+P_hotel = 0; % Watts, baseline power
 battery_density_Wh_kg = 150; % Wh/kg
 max_battery_fraction = 0.8; % Max mass fraction for battery
 t_work_cycle_h = 6; % hours of work before recharge
@@ -46,6 +46,15 @@ rho_i         = 1.3;
 
 % Pareto Optimization Weights [Total Mass, Energy, Mass Ratio, Freq Diff from 50Hz]
 pareto_weights = [1.0, 0.5, 0.0, 0.6]; 
+
+% Drive Wheel Locomotion Parameters
+DRIVE.Nw = 4;                     % Number of drive wheels
+DRIVE.D = 1.50;                   % Drive wheel diameter [m]
+DRIVE.b = 0.25;                   % Drive wheel width [m]
+DRIVE.kwheel = 1e6;               % Radial stiffness [N/m]
+DRIVE.slip = 0.40;                % Slip ratio [0 to 1]
+DRIVE.bulldozing_factor = 0.20;   % Rb = factor * Rc
+DRIVE.K = 0.02;                   % Shear deformation modulus [m]
 
 %% 2. Define the 5D Sweep Grid
 f_range = linspace(10, 50, 5);
@@ -126,7 +135,7 @@ parfor i = 1:numel(F_grid)
     [rho_final, total_avg_power_W, total_passes, total_cycles, lc_avg_dynamic, total_energy_kWh, is_valid, max_F_loco] = ...
         run_compaction_sim(W_roller, b_roller, D_roller, m_eccentric, f, v_sim, mass_ratio, m_rov, ...
         target_relative_density, bounce_margin, h_layer, SOIL, eta_mech, nu, rho_min_lunar, rho_max_lunar, rho_i, ...
-        Apad, n_rollers, c_f, g_moon, P_hotel, battery_density_Wh_kg, max_battery_fraction, t_work_cycle_h, max_sinkage_ratio);
+        Apad, n_rollers, c_f, g_moon, P_hotel, battery_density_Wh_kg, max_battery_fraction, t_work_cycle_h, max_sinkage_ratio, DRIVE);
     
     %Time and power sanity check
     if is_valid
@@ -228,7 +237,7 @@ end
 
 %% Functions (Copied from CompactionChen.m)
 function [rho_final, total_avg_power_W, total_passes, total_cycles, lc_avg_dynamic, total_energy_kWh, is_valid, max_F_loco] = ...
-    run_compaction_sim(W_roller, b_roller, D_roller, m_eccentric, f, v_sim, mass_ratio, m_rov, target_relative_density, bounce_margin, h_layer, SOIL, eta_mech, nu, rho_min_lunar, rho_max_lunar, rho_i, Apad, n_rollers, c_f, g_moon, P_hotel, battery_density_Wh_kg, max_battery_fraction, t_work_cycle_h, max_sinkage_ratio)
+    run_compaction_sim(W_roller, b_roller, D_roller, m_eccentric, f, v_sim, mass_ratio, m_rov, target_relative_density, bounce_margin, h_layer, SOIL, eta_mech, nu, rho_min_lunar, rho_max_lunar, rho_i, Apad, n_rollers, c_f, g_moon, P_hotel, battery_density_Wh_kg, max_battery_fraction, t_work_cycle_h, max_sinkage_ratio, DRIVE)
     
     % Internal Initializations
     max_F_loco = 0;
@@ -241,12 +250,12 @@ function [rho_final, total_avg_power_W, total_passes, total_cycles, lc_avg_dynam
     
     F0 = m_eccentric * omega^2;
     
-    % FAST FAIL: Bounce check
-    if F0 >= (W_roller * bounce_margin)
-        is_valid = false; 
-        rho_final = NaN; total_avg_power_W = NaN; total_passes = NaN; total_cycles = NaN; lc_avg_dynamic = NaN; total_energy_kWh = NaN;
-        return;
-    end
+    % % FAST FAIL: Bounce check 
+    % if F0 >= (W_roller * bounce_margin)
+    %     is_valid = false; 
+    %     rho_final = NaN; total_avg_power_W = NaN; total_passes = NaN; total_cycles = NaN; lc_avg_dynamic = NaN; total_energy_kWh = NaN;
+    %     return;
+    % end
     
     rho_f = rho_min_lunar + target_relative_density * (rho_max_lunar - rho_min_lunar);
     rho = rho_i; 
@@ -276,6 +285,50 @@ function [rho_final, total_avg_power_W, total_passes, total_cycles, lc_avg_dynam
     KE_peak = (m_eccentric * omega)^2 / (2 * m_drum);
     req_vib_power = (KE_peak * f) / eta_mech;
 
+    % =========================================================================
+    % PASS 1 FAST-BREAK TRACTION CHECK
+    % Calculate the resistance the roller will experience on the very first pass 
+    % using baseline (loose) soil moduli. If the drive wheels cannot overcome 
+    % this initial resistance, discard the design immediately.
+    % =========================================================================
+    
+    % 1. Roller Sinkage & Resistance on Pass 1
+    z_pass1 = calculate_tandem_sinkage(W_roller, b_roller, D_roller, SOIL.kc, SOIL.kphi, n_rollers);
+    z_safe_p1 = max(z_pass1, 1e-6);
+    
+    alpha_arg_p1 = max(-1, min(1, 1 - 2*z_safe_p1/D_roller));
+    alpha_p1 = max(acos(alpha_arg_p1), 1e-6);
+    l_o_p1 = z_safe_p1 * tan(pi/4 - SOIL.phi/2)^2;
+    
+    R_r_p1 = (W_roller * n_rollers) * c_f;
+    R_c_p1 = 0.5 * (SOIL.kc + b_roller * SOIL.kphi) * z_safe_p1^2 * n_rollers;
+    
+    term1_b_p1 = (b_roller * sin(alpha_p1 + SOIL.phi)) / (2 * sin(alpha_p1) * cos(SOIL.phi));
+    term2_b_p1 = 2 * z_safe_p1 * SOIL.c * SOIL.K_c + SOIL.gamma * z_safe_p1^2 * SOIL.K_gamma;
+    term3_b_p1 = (l_o_p1^3 * SOIL.gamma / 3) * (pi/2 - SOIL.phi);
+    term4_b_p1 = SOIL.c * l_o_p1^2 * (1 + tan(pi/4 + SOIL.phi/2));
+    R_b_p1 = term1_b_p1 * term2_b_p1 + term3_b_p1 + term4_b_p1;
+    
+    F_loco_required_p1 = R_r_p1 + R_c_p1 + R_b_p1;
+    
+    % 2. Calculate Drive Wheel Capabilities
+    % Calculate normal load per drive wheel in Newtons (mass not used by rollers)
+    W_drive_wheel = (m_rov * g_moon - W_roller * n_rollers) / DRIVE.Nw;
+    
+    % Call the external wheel model with configuration parameters
+    drive_result = lunar_wheel_model(W_drive_wheel, DRIVE.D, DRIVE.b, DRIVE.kwheel, DRIVE.slip, DRIVE.bulldozing_factor, SOIL.kc, SOIL.kphi, SOIL.n, SOIL.c, rad2deg(SOIL.phi), DRIVE.K);
+    
+    % Drawbar pull is the excess traction after wheel resistance is subtracted.
+    total_available_DBP = drive_result.drawbar_pull_DP_N * DRIVE.Nw;
+    
+    % 3. Fast Break Evaluation
+    if total_available_DBP < F_loco_required_p1
+        is_valid = false;
+        rho_final = NaN; total_avg_power_W = NaN; total_passes = NaN; total_cycles = NaN; lc_avg_dynamic = NaN; total_energy_kWh = NaN;
+        return; % Exit the function early to save computation time
+    end
+    % =========================================================================
+
     while rho < rho_f
         current_pass = current_pass + 1;
         rho_before_pass = rho; % Track density before the pass starts
@@ -304,7 +357,7 @@ function [rho_final, total_avg_power_W, total_passes, total_cycles, lc_avg_dynam
         
         l_o = z_safe * tan(pi/4 - SOIL.phi/2)^2;
         
-        R_r = m_rov * g_moon * c_f; % Rolling resistance
+        R_r = (W_roller * n_rollers) * c_f; % Rolling resistance
         R_c = 0.5 * (kc_dyn + b_roller * kphi_dyn) * z_safe^2 * n_rollers; % Compression resistance
         
         % Bulldozing resistance (applied to leading roller only)
@@ -471,5 +524,5 @@ function updateProgress(total)
     count = count + 50;
     pct = (count / total) * 100;
     % Use \r to overwrite the line for a cleaner look
-    fprintf('Progress: %.2f%% (%d of %d)\r', pct, count, total);
+    fprintf('Progress: %.2f%% (%d of %d)\n', pct, count, total);
 end
