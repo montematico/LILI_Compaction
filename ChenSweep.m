@@ -7,7 +7,7 @@ Apad     = 500;       % m^2
 Tavail_h = 1000;    % hours, total allowed compaction time for 1 pad - 6mon
 energy_max_kWh = 400;
 target_relative_density = 0.85;
-roller_fraction = 0.3;
+% roller_fraction = 0.3;
 n_rollers   = 2;
 bounce_margin = 1.8; %apparently this is fine
 h_layer  = 0.12; %depth of layer being compacted
@@ -49,49 +49,53 @@ pareto_weights = [1.0, 0.5, 0.0, 0.6];
 
 % Drive Wheel Locomotion Parameters
 DRIVE.Nw = 4;                     % Number of drive wheels
-DRIVE.D = 1.50;                   % Drive wheel diameter [m]
+% DRIVE.D = 1.50;                   % Drive wheel diameter [m]
 DRIVE.b = 0.25;                   % Drive wheel width [m]
 DRIVE.kwheel = 1e6;               % Radial stiffness [N/m]
 DRIVE.slip = 0.40;                % Slip ratio [0 to 1]
 DRIVE.bulldozing_factor = 0.20;   % Rb = factor * Rc
 DRIVE.K = 0.02;                   % Shear deformation modulus [m]
 
-%% 2. Define the 5D Sweep Grid
-f_range = linspace(10, 50, 5);
-m_eccentric_range = logspace(-4, log10(0.5e-2), 5);
+%% 2. Define the 7D Sweep Grid
+f_range = linspace(30, 80, 3);
+m_eccentric_range = logspace(-4, log10(0.5e-2), 4);
 m_rov_range = linspace(20, 100, 10);
-mass_ratio_range = linspace(0.2, 0.8, 5);
-R_roller_range = linspace(0.07, 0.20, 5);
+mass_ratio_range = linspace(0.2, 0.8, 3);
+R_roller_range = linspace(0.07, 0.20, 3);
+roller_fraction_range = linspace(0.2, 0.6, 4);
+D_wheel_range = linspace(0.3, 0.8, 3);
 
-[F_grid, M_ECC_grid, M_ROV_grid, M_RATIO_grid, R_ROLLER_grid] = ndgrid(f_range, m_eccentric_range, m_rov_range, mass_ratio_range, R_roller_range);
+[F_GRID, M_ECC_GRID, M_ROV_GRID, M_RATIO_GRID, R_ROLLER_GRID, ROL_FRAC_GRID, D_WHEEL_GRID] = ndgrid(f_range, m_eccentric_range, m_rov_range, mass_ratio_range, R_roller_range, roller_fraction_range, D_wheel_range);
 
 % Initialize results arrays
-Rho_results = nan(size(F_grid));
-Power_results = nan(size(F_grid));
-Passes_results = nan(size(F_grid));
-Cycles_results = nan(size(F_grid));
-Energy_results = nan(size(F_grid));
-Time_results = nan(size(F_grid));
-Max_Traction_results = nan(size(F_grid));
-Valid_mask = false(size(F_grid));
+Rho_results = nan(size(F_GRID));
+Power_results = nan(size(F_GRID));
+Passes_results = nan(size(F_GRID));
+Cycles_results = nan(size(F_GRID));
+Energy_results = nan(size(F_GRID));
+Time_results = nan(size(F_GRID));
+Max_Traction_results = nan(size(F_GRID));
+Valid_mask = false(size(F_GRID));
 
 if dry_run
     fprintf('DRY RUN ENABLED: Slicing grid to first 10 combinations.\n');
-    F_grid = F_grid(1:min(10, end));
-    M_ECC_grid = M_ECC_grid(1:min(10, end));
-    M_ROV_grid = M_ROV_grid(1:min(10, end));
-    M_RATIO_grid = M_RATIO_grid(1:min(10, end));
-    R_ROLLER_grid = R_ROLLER_grid(1:min(10, end));
+    F_GRID = F_GRID(1:min(10, end));
+    M_ECC_GRID = M_ECC_GRID(1:min(10, end));
+    M_ROV_GRID = M_ROV_GRID(1:min(10, end));
+    M_RATIO_GRID = M_RATIO_GRID(1:min(10, end));
+    R_ROLLER_GRID = R_ROLLER_GRID(1:min(10, end));
+    ROL_FRAC_GRID = ROL_FRAC_GRID(1:min(10, end));
+    D_WHEEL_GRID = D_WHEEL_GRID(1:min(10, end));
     
     % Re-initialize results arrays for sliced grid
-    Rho_results = nan(size(F_grid));
-    Power_results = nan(size(F_grid));
-    Passes_results = nan(size(F_grid));
-    Cycles_results = nan(size(F_grid));
-    Energy_results = nan(size(F_grid));
-    Time_results = nan(size(F_grid));
-    Max_Traction_results = nan(size(F_grid));
-    Valid_mask = false(size(F_grid));
+    Rho_results = nan(size(F_GRID));
+    Power_results = nan(size(F_GRID));
+    Passes_results = nan(size(F_GRID));
+    Cycles_results = nan(size(F_GRID));
+    Energy_results = nan(size(F_GRID));
+    Time_results = nan(size(F_GRID));
+    Max_Traction_results = nan(size(F_GRID));
+    Valid_mask = false(size(F_GRID));
 end
 
 % Parpool setup
@@ -109,22 +113,26 @@ end
 % 1. Set up the DataQueue
 D = parallel.pool.DataQueue;
 % 2. Define total iterations for percentage calculation
-total_iters = numel(F_grid);
+total_iters = numel(F_GRID);
 % 3. Use an anonymous function with a persistent counter to track progress
 afterEach(D, @(x) updateProgress(total_iters));
 
 %% 3. The Main Sweep Loop
-fprintf('Running simulation for %d combinations...\n', numel(F_grid));
+fprintf('Running simulation for %d combinations...\n', numel(F_GRID));
 success_count = 0;
 
 tic
-parfor i = 1:numel(F_grid)
+parfor i = 1:numel(F_GRID)
     % Extract current iteration's parameters
-    f = F_grid(i);
-    m_eccentric = M_ECC_grid(i);
-    m_rov = M_ROV_grid(i);
-    mass_ratio = M_RATIO_grid(i);
-    R_roller = R_ROLLER_grid(i);
+    f = F_GRID(i);
+    m_eccentric = M_ECC_GRID(i);
+    m_rov = M_ROV_GRID(i);
+    mass_ratio = M_RATIO_GRID(i);
+    R_roller = R_ROLLER_GRID(i);
+    roller_fraction = ROL_FRAC_GRID(i);
+    
+    loop_DRIVE = DRIVE;
+    loop_DRIVE.D = D_WHEEL_GRID(i);
     
     % Derived parameters
     D_roller = R_roller * 2;
@@ -135,7 +143,7 @@ parfor i = 1:numel(F_grid)
     [rho_final, total_avg_power_W, total_passes, total_cycles, lc_avg_dynamic, total_energy_kWh, is_valid, max_F_loco] = ...
         run_compaction_sim(W_roller, b_roller, D_roller, m_eccentric, f, v_sim, mass_ratio, m_rov, ...
         target_relative_density, bounce_margin, h_layer, SOIL, eta_mech, nu, rho_min_lunar, rho_max_lunar, rho_i, ...
-        Apad, n_rollers, c_f, g_moon, P_hotel, battery_density_Wh_kg, max_battery_fraction, t_work_cycle_h, max_sinkage_ratio, DRIVE);
+        Apad, n_rollers, c_f, g_moon, P_hotel, battery_density_Wh_kg, max_battery_fraction, t_work_cycle_h, max_sinkage_ratio, loop_DRIVE);
     
     %Time and power sanity check
     if is_valid
@@ -185,10 +193,10 @@ if isempty(valid_idx)
     fprintf('No successful points found. Cannot perform Pareto analysis.\n');
 else
     % Extract valid vectors
-    m_rov_vec = M_ROV_grid(valid_idx);
+    m_rov_vec = M_ROV_GRID(valid_idx);
     energy_vec = Energy_results(valid_idx);
-    mass_ratio_vec = M_RATIO_grid(valid_idx);
-    f_vec = F_grid(valid_idx);
+    mass_ratio_vec = M_RATIO_GRID(valid_idx);
+    f_vec = F_GRID(valid_idx);
     
     % 4-Objective Matrix: [Minimize Mass, Minimize Energy, Maximize Ratio, Target 50Hz]
     objectives = [m_rov_vec, energy_vec, 1./mass_ratio_vec, abs(f_vec - 50)];
@@ -214,9 +222,11 @@ else
     
     % 2. Extract Pareto vectors for stats
     pareto_max_traction = Max_Traction_results(pareto_idx);
-    pareto_radius = R_ROLLER_grid(pareto_idx);
-    pareto_m_rov = M_ROV_grid(pareto_idx);
-    pareto_mass_ratios = M_RATIO_grid(pareto_idx);
+    pareto_radius = R_ROLLER_GRID(pareto_idx);
+    pareto_m_rov = M_ROV_GRID(pareto_idx);
+    pareto_mass_ratios = M_RATIO_GRID(pareto_idx);
+    pareto_rol_frac = ROL_FRAC_GRID(pareto_idx);
+    pareto_d_wheel = D_WHEEL_GRID(pareto_idx);
 
     % 3. Print Summary Table
     fprintf('\n================ PARETO OPTIMAL SUMMARY (N=%d) ================\n', length(pareto_idx));
@@ -227,12 +237,14 @@ else
     fprintf('%-25s | %-10.1f | %-10.1f | %-10.1f\n', 'Total Rover Mass (kg)', mean(pareto_m_rov), min(pareto_m_rov), max(pareto_m_rov));
     fprintf('%-25s | %-10.2f | %-10.2f | %-10.2f\n', 'Mass Ratio', mean(pareto_mass_ratios), min(pareto_mass_ratios), max(pareto_mass_ratios));
     fprintf('%-25s | %-10.4f | %-10.4f | %-10.4f\n', 'Gross Area Rate (m^2/s)', mean(gross_area_rates), min(gross_area_rates), max(gross_area_rates));
+    fprintf('%-25s | %-10.2f | %-10.2f | %-10.2f\n', 'Roller Fraction', mean(pareto_rol_frac), min(pareto_rol_frac), max(pareto_rol_frac));
+    fprintf('%-25s | %-10.3f | %-10.3f | %-10.3f\n', 'Drive Wheel Diameter (m)', mean(pareto_d_wheel), min(pareto_d_wheel), max(pareto_d_wheel));
     fprintf('---------------------------------------------------------------\n');
     fprintf('Constant Net Area Rate: %.4f m^2/s\n', net_area_rate);
     fprintf('===============================================================\n\n');
 
     save('LunarCompactionResults.mat');
-    plot_compaction_results('LunarCompactionResults.mat');
+    %plot_compaction_results('LunarCompactionResults.mat');
 end
 
 %% Functions (Copied from CompactionChen.m)
