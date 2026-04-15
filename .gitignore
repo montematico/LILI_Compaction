@@ -3,3 +3,6 @@
 *.asv
 .geminiignore
 .gemini/
+Graphics/
+*.fig
+*.md
