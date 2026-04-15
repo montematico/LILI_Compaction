@@ -4,7 +4,7 @@ clear updateProgress;
 %% 1. Constants and Setup
 g_moon   = 1.62;      % m/s^2
 Apad     = 500;       % m^2
-Tavail_h = 1000;    % hours, total allowed compaction time for 1 pad - 6mon
+Tavail_h = 1200;    % hours, total allowed compaction time for 1 pad - 6mon
 energy_max_kWh = 400;
 target_relative_density = 0.85;
 % roller_fraction = 0.3;
@@ -44,11 +44,11 @@ rho_min_lunar = 1.27; %Used for converting RD's
 rho_max_lunar = 1.95; % "
 rho_i         = 1.3;
 
-% Pareto Optimization Weights [Total Mass, Energy, Mass Ratio, Freq Diff from 50Hz]
-pareto_weights = [1.0, 0.5, 0.0, 0.6]; 
+% Pareto Optimization Weights [Total Mass, Energy, Mass Ratio, Freq Diff from 50Hz, traction margin]
+pareto_weights = [0, 0, 0.0, 0.0, 1]; 
 
 % Drive Wheel Locomotion Parameters
-DRIVE.Nw = 4;                     % Number of drive wheels
+DRIVE.Nw = 6;                     % Number of drive wheels
 % DRIVE.D = 1.50;                   % Drive wheel diameter [m]
 DRIVE.b = 0.25;                   % Drive wheel width [m]
 DRIVE.kwheel = 1e6;               % Radial stiffness [N/m]
@@ -60,10 +60,10 @@ DRIVE.K = 0.02;                   % Shear deformation modulus [m]
 f_range = linspace(30, 80, 3);
 m_eccentric_range = logspace(-4, log10(0.5e-2), 4);
 m_rov_range = linspace(20, 100, 10);
-mass_ratio_range = linspace(0.2, 0.8, 3);
-R_roller_range = linspace(0.07, 0.20, 3);
+mass_ratio_range = linspace(0.2, 0.8, 5);
+R_roller_range = linspace(0.07, 0.50, 5);
 roller_fraction_range = linspace(0.2, 0.6, 4);
-D_wheel_range = linspace(0.3, 0.8, 3);
+D_wheel_range = linspace(0.1, 0.6, 4);
 
 [F_GRID, M_ECC_GRID, M_ROV_GRID, M_RATIO_GRID, R_ROLLER_GRID, ROL_FRAC_GRID, D_WHEEL_GRID] = ndgrid(f_range, m_eccentric_range, m_rov_range, mass_ratio_range, R_roller_range, roller_fraction_range, D_wheel_range);
 
@@ -197,10 +197,17 @@ else
     energy_vec = Energy_results(valid_idx);
     mass_ratio_vec = M_RATIO_GRID(valid_idx);
     f_vec = F_GRID(valid_idx);
-    
-    % 4-Objective Matrix: [Minimize Mass, Minimize Energy, Maximize Ratio, Target 50Hz]
-    objectives = [m_rov_vec, energy_vec, 1./mass_ratio_vec, abs(f_vec - 50)];
-    
+
+    % --- NEW: Calculate Required Traction Coefficient ---
+    % mu_req = F_loco / W_total
+    mu_req_vec = Max_Traction_results(valid_idx) ./ (m_rov_vec .* g_moon);
+
+    % 5-Objective Matrix: 
+    % [Minimize Mass, Minimize Energy, Maximize Ratio, Target 50Hz, Minimize mu_req]
+    objectives = [m_rov_vec, energy_vec, 1./mass_ratio_vec, abs(f_vec - 50), mu_req_vec];
+
+    % Apply Weights to Objectives
+    objectives = objectives .* pareto_weights;    
     % Find the non-dominated set (Pareto Front)
     is_pareto = true(length(valid_idx), 1);
     for i = 1:length(valid_idx)
