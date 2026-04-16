@@ -1,9 +1,8 @@
+clear; clc
 % Load the workspace containing grid sweep variables and simulation constants
 % Using LunarCompactionResults.mat instead of SweepResults.mat per project logic
 if isfile('LunarCompactionResults.mat')
-    load('LunarCompactionResults.mat', 'M_ROV_GRID', 'R_ROLLER_GRID', 'SOIL', 'g_moon', 'c_f');
-elseif isfile('SweepResults.mat')
-    load('SweepResults.mat', 'M_ROV_GRID', 'R_ROLLER_GRID', 'SOIL', 'g_moon', 'c_f');
+    load('LunarCompactionResults.mat');
 else
     error('Could not find results .mat file.');
 end

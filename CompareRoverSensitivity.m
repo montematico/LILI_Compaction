@@ -16,7 +16,8 @@ else
 end
 
 % Define target indices for light, medium, and heavy rover designs
-target_indices = [12137, 53, 65, 716]; 
+% target_indices = [12137, 53, 65, 716]; 
+target_indices = [36137,12065,12065,12716];
 labels = {'Minimum mass', ...
           'Robust in bottom 25% of mass', ...
           'Balanced robust/mass', ...
@@ -43,6 +44,10 @@ for i = 1:length(target_indices)
     
     % Extract base parameters from grid
     m_opt = M_ROV_GRID(idx);
+    
+    % Update label to include mass
+    labels{i} = sprintf('%s (%.0f kg)', labels{i}, m_opt);
+    
     R_roller_opt = R_ROLLER_GRID(idx);
     
     % Derived parameters
