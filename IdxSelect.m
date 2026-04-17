@@ -1,16 +1,23 @@
 clear; clc
 % Load the workspace containing grid sweep variables and simulation constants
-% Using LunarCompactionResults.mat instead of SweepResults.mat per project logic
 if isfile('LunarCompactionResults.mat')
     load('LunarCompactionResults.mat');
 else
     error('Could not find results .mat file.');
 end
 
-% 1. Filter for all valid designs that pass the 0.45 traction threshold
-% Using Max_Traction_results ./ (M_ROV_grid * g_moon) to get mu_req
-mu_req_all = Max_Traction_results ./ (M_ROV_GRID * g_moon);
-candidates = find(Valid_mask & (mu_req_all < 0.45));
+% --- Design Requirements ---
+slope_deg = 10;
+safety_factor = 1.8;
+F_slope = M_ROV_GRID * g_moon * sin(deg2rad(slope_deg));
+
+% 1. Filter for all valid designs
+% mu_req includes the force to overcome rollers + slope, scaled by safety factor
+mu_req_all = ((Max_Traction_results + F_slope) * safety_factor) ./ (M_ROV_GRID * g_moon);
+
+% Increased threshold to 1.1 to account for 1.8x SF and 10deg slope
+mu_threshold = 1.1; 
+candidates = find(Valid_mask & (mu_req_all < mu_threshold));
 
 if isempty(candidates)
     error('No designs found below the 0.45 traction limit. Consider increasing M_ROV_grid or R_ROLLER_grid ranges.');
@@ -40,14 +47,53 @@ light_candidates = candidates(M_ROV_GRID(candidates) <= mass_threshold);
 [~, local_light_robust_idx] = min(mu_req_all(light_candidates));
 idx_light_robust = light_candidates(local_light_robust_idx);
 
+% --- Index 5: The "Utopia Compromise" (4D Optimization) ---
+% Extract values for safe candidates
+m_vals = M_ROV_GRID(candidates);
+u_vals = mu_req_all(candidates);
+e_vals = Energy_results(candidates);
+d_vals = R_ROLLER_GRID(candidates) * n_rollers;
+
+% Normalize to 0-1 scale
+norm_m = (m_vals - min(m_vals)) ./ (max(m_vals) - min(m_vals));
+norm_u = (u_vals - min(u_vals)) ./ (max(u_vals) - min(u_vals));
+norm_e = (e_vals - min(e_vals)) ./ (max(e_vals) - min(e_vals));
+norm_d = (d_vals - min(d_vals)) ./ (max(d_vals) - min(d_vals));
+
+% Calculate 4D Euclidean distance to (0,0,0,0)
+dist_utopia = sqrt(norm_m.^2 + norm_u.^2 + norm_e.^2 + norm_d.^2);
+[~, local_utopia_idx] = min(dist_utopia);
+idx_utopia = candidates(local_utopia_idx);
+
 % Consolidate for the Comparison Script
-comparison_indices = [idx_min_mass, idx_light_robust, idx_balanced, idx_best_traction];
-labels = {'Minimum Mass Survivor', 'Light-Robust Peak', 'Balanced Design', 'Maximum Traction Margin'};
+comparison_indices = [idx_min_mass, idx_best_traction, idx_balanced, idx_light_robust, idx_utopia];
+labels = {'Minimum Mass Survivor', 'Maximum Traction Margin', 'Balanced Design', 'Light-Robust Peak', 'Utopia Compromise'};
 
 % Display results
 fprintf('\n--- Selection Results ---\n');
+% Dynamically construct header with wheel count
+dbp_header = sprintf('DBP/%dw (N)', DRIVE.Nw);
+fprintf('%-25s | %-6s | %-8s | %-6s | %-12s | %-12s | %-10s | %-20s\n', ...
+    'Design Label', 'Index', 'Mass', 'mu_req', dbp_header, 'Energy (kWh)', 'Time (hr)', 'Spec. Energy (kWh/kg)');
+fprintf('%s\n', repmat('-', 1, 125));
 for i = 1:length(comparison_indices)
     idx = comparison_indices(i);
-    fprintf('%-25s | Index: %d | Mass: %5.1f kg | mu_req: %5.3f\n', ...
-        labels{i}, idx, M_ROV_GRID(idx), mu_req_all(idx));
+    % DBP per wheel = (F_rollers + F_slope) * SF / DRIVE.Nw
+    F_total_req = (Max_Traction_results(idx) + F_slope(idx)) * safety_factor;
+    dbp_per_wheel = F_total_req / DRIVE.Nw;
+    
+    fprintf('%-25s | %6d | %5.1f kg | %6.3f | %12.2f | %12.2f | %10.1f | %18.4f\n', ...
+        labels{i}, idx, M_ROV_GRID(idx), mu_req_all(idx), dbp_per_wheel, Energy_results(idx), Time_results(idx), Energy_results(idx) / M_ROV_GRID(idx));
 end
+
+% --- Task 2: Tradeoff Scatter Plots ---
+figure('Name', 'Design Space Tradeoffs', 'Color', 'w');
+
+hold on; grid on;
+% scatter(M_ROV_GRID(Valid_mask), mu_req_all(Valid_mask), 10, [0.8 0.8 0.8], 'filled'); % Background
+scatter(M_ROV_GRID(candidates), mu_req_all(candidates), 20, 'b'); % Safe
+plot(M_ROV_GRID(idx_utopia), mu_req_all(idx_utopia), 'p', 'MarkerFaceColor', 'r', 'MarkerSize', 15); % Utopia
+% yline(0.45, '--r', 'LineWidth', 1.5);
+xlabel('Total Rover Mass (kg)'); ylabel('Required Traction Coef. (\mu_{req})');
+title('Mass vs. Traction Coef.');
+
