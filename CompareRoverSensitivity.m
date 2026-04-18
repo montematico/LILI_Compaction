@@ -8,9 +8,7 @@ clear; clc; close all;
 % Load the workspace containing grid sweep variables and simulation constants
 % Using LunarCompactionResults.mat instead of SweepResults.mat per project logic
 if isfile('LunarCompactionResults.mat')
-    load('LunarCompactionResults.mat', 'M_ROV_GRID', 'R_ROLLER_GRID', 'ROL_FRAC_GRID', 'SOIL', 'g_moon', 'c_f');
-elseif isfile('SweepResults.mat')
-    load('SweepResults.mat', 'M_ROV_GRID', 'R_ROLLER_GRID', 'ROL_FRAC_GRID', 'SOIL', 'g_moon', 'c_f');
+    load('LunarCompactionResults.mat', 'M_ROV_GRID', 'R_ROLLER_GRID', 'ROL_FRAC_GRID', 'SOIL', 'g_moon', 'c_f','n_rollers','b_roller');
 else
     error('Could not find results .mat file.');
 end
@@ -26,17 +24,15 @@ labels = {'Minimum mass', ...
 % Threshold for traction failure
 mu_threshold = 0.45;
 
-%% Core Task: Soil Degradation Loop
-% ... (rest of the calculation loop remains same)
-% Soil modulus shifts from -40% weaker to +10% stronger
-soil_mod_shifts = linspace(-0.4, 0.1, 10);
+%% Soil Degradation Loop
+% Soil modulus shifts from -40% weaker to +40% stronger
+soil_mod_shifts = linspace(-0.4, 0.4, 30);
 
 % Initialize results matrix (Rows: Rovers, Columns: Shifts)
 mu_req_results = zeros(length(target_indices), length(soil_mod_shifts));
 
-% Predefined assumptions based on the prompt
-n_rollers = 2;
-b_roller = 0.3;
+% n_rollers = 2;
+% b_roller = 0.3;
 
 for i = 1:length(target_indices)
     idx = target_indices(i);
@@ -94,11 +90,16 @@ hold on; grid on;
 
 % Plot results for each rover
 colors = lines(length(target_indices));
-markers = {'o', 's', '^', 'd', 'v', 'p', 'h'};
+% markers = {'o', 's', '^', 'd', 'v', 'p', 'h'};
 for i = 1:length(target_indices)
+    %Markers
+    % plot(soil_mod_shifts * 100, mu_req_results(i, :), '-', ...
+    %      'Color', colors(i,:), 'Marker', markers{i}, 'MarkerFaceColor', colors(i,:), ...
+    %      'LineWidth', 2, 'DisplayName', labels{i});
+    %Just Colored Lines
     plot(soil_mod_shifts * 100, mu_req_results(i, :), '-', ...
-         'Color', colors(i,:), 'Marker', markers{i}, 'MarkerFaceColor', colors(i,:), ...
-         'LineWidth', 2, 'DisplayName', labels{i});
+       'Color', colors(i,:), 'MarkerFaceColor', colors(i,:), ...
+       'LineWidth', 2, 'DisplayName', labels{i});
 end
 
 % Add horizontal dashed red line at y = mu_threshold with dynamic TeX label

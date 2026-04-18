@@ -1,4 +1,4 @@
-clear; clc
+clear; clc; close all
 % Load the workspace containing grid sweep variables and simulation constants
 if isfile('LunarCompactionResults.mat')
     load('LunarCompactionResults.mat');
@@ -90,10 +90,19 @@ end
 figure('Name', 'Design Space Tradeoffs', 'Color', 'w');
 
 hold on; grid on;
-% scatter(M_ROV_GRID(Valid_mask), mu_req_all(Valid_mask), 10, [0.8 0.8 0.8], 'filled'); % Background
-scatter(M_ROV_GRID(candidates), mu_req_all(candidates), 20, 'b'); % Safe
-plot(M_ROV_GRID(idx_utopia), mu_req_all(idx_utopia), 'p', 'MarkerFaceColor', 'r', 'MarkerSize', 15); % Utopia
-% yline(0.45, '--r', 'LineWidth', 1.5);
+% Plot all "Safe" candidates as reference
+scatter(M_ROV_GRID(candidates), mu_req_all(candidates), 20, [0.8 0.8 0.8], 'DisplayName', 'Safe Designs','MarkerEdgeColor','b');
+
+% Loop through each comparison index and plot as a star
+colors = lines(length(comparison_indices)); % Get distinctive colors
+for i = 1:length(comparison_indices)
+    idx = comparison_indices(i);
+    plot(M_ROV_GRID(idx), mu_req_all(idx), 'p', ...
+        'MarkerFaceColor', colors(i,:), 'MarkerEdgeColor', 'k', ...
+        'MarkerSize', 15, 'DisplayName', labels{i});
+end
+
 xlabel('Total Rover Mass (kg)'); ylabel('Required Traction Coef. (\mu_{req})');
 title('Mass vs. Traction Coef.');
+legend('Location', 'best');
 

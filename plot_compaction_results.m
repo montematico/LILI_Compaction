@@ -4,11 +4,11 @@ close all
 if nargin < 1; dataFile = 'LunarCompactionResults.mat'; end
 load(dataFile);
 
-% --- Plotting Configuration ---
+% Plotting Configuration
 color_percentile = 85; % Upper percentile limit for color axis
 show_pareto = false;    % Toggle for overlaying Pareto optimal points
 
-% 1. Design Robustness Histogram (New Figure)
+% 1. Design Robustness Histogram 
 unique_masses = unique(M_ROV_GRID);
 success_rates = zeros(size(unique_masses));
 for i = 1:length(unique_masses)
