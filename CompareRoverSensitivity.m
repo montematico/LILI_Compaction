@@ -8,22 +8,23 @@ clear; clc; close all;
 % Load the workspace containing grid sweep variables and simulation constants
 % Using LunarCompactionResults.mat instead of SweepResults.mat per project logic
 if isfile('LunarCompactionResults.mat')
-    load('LunarCompactionResults.mat', 'M_ROV_GRID', 'R_ROLLER_GRID', 'SOIL', 'g_moon', 'c_f');
+    load('LunarCompactionResults.mat', 'M_ROV_GRID', 'R_ROLLER_GRID', 'ROL_FRAC_GRID', 'SOIL', 'g_moon', 'c_f');
 elseif isfile('SweepResults.mat')
-    load('SweepResults.mat', 'M_ROV_GRID', 'R_ROLLER_GRID', 'SOIL', 'g_moon', 'c_f');
+    load('SweepResults.mat', 'M_ROV_GRID', 'R_ROLLER_GRID', 'ROL_FRAC_GRID', 'SOIL', 'g_moon', 'c_f');
 else
     error('Could not find results .mat file.');
 end
 
 % Define target indices for light, medium, and heavy rover designs
-target_indices = [12137, 53, 65, 716]; 
+% target_indices = [12137, 53, 65, 716]; 
+target_indices = [36137,12065,12716,24266];
 labels = {'Minimum mass', ...
           'Robust in bottom 25% of mass', ...
-          'Balanced robust/mass', ...
-          'Traction robust'};
+          'Traction robust', ...
+          'Utopia Compromise'};
 
 % Threshold for traction failure
-mu_threshold = 0.60;
+mu_threshold = 0.45;
 
 %% Core Task: Soil Degradation Loop
 % ... (rest of the calculation loop remains same)
@@ -34,7 +35,6 @@ soil_mod_shifts = linspace(-0.4, 0.1, 10);
 mu_req_results = zeros(length(target_indices), length(soil_mod_shifts));
 
 % Predefined assumptions based on the prompt
-roller_fraction = 0.5;
 n_rollers = 2;
 b_roller = 0.3;
 
@@ -43,6 +43,11 @@ for i = 1:length(target_indices)
     
     % Extract base parameters from grid
     m_opt = M_ROV_GRID(idx);
+    roller_fraction = ROL_FRAC_GRID(idx);
+    
+    % Update label to include mass
+    labels{i} = sprintf('%s (%.0f kg)', labels{i}, m_opt);
+    
     R_roller_opt = R_ROLLER_GRID(idx);
     
     % Derived parameters
@@ -96,9 +101,11 @@ for i = 1:length(target_indices)
          'LineWidth', 2, 'DisplayName', labels{i});
 end
 
-% Add horizontal dashed red line at y = mu_threshold
-yline(mu_threshold, 'r--', 'Traction Failure Limit (\mu = 0.60)', ...
-      'LineWidth', 2, 'LabelHorizontalAlignment', 'left', 'HandleVisibility', 'off');
+% Add horizontal dashed red line at y = mu_threshold with dynamic TeX label
+ytext = sprintf('Traction Failure Limit (\\mu = %0.2f)', mu_threshold);
+hY = yline(mu_threshold, 'r--', 'LineWidth', 2, ...
+           'LabelHorizontalAlignment', 'left', 'HandleVisibility', 'off');
+set(hY, 'Label', ytext, 'Interpreter', 'tex');
 
 % Optional: Shaded red patch covering the "Danger Zone"
 x_lims = [min(soil_mod_shifts * 100), max(soil_mod_shifts * 100)];
