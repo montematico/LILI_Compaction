@@ -14,12 +14,8 @@ else
 end
 
 % Define target indices for light, medium, and heavy rover designs
-% target_indices = [12137, 53, 65, 716]; 
-target_indices = [36137,12065,12716,24266];
-labels = {'Minimum mass', ...
-          'Robust in bottom 25% of mass', ...
-          'Traction robust', ...
-          'Utopia Compromise'};
+target_indices = [12006,12716,12053,12150,36494];
+labels = {'Minimum mass', 'Maximum Traction Margin','Balanced (Mass \mu)', 'Balanced  25%th mass', 'Balanced (Mass,\mu,wheel d,energy)'};
 
 % Threshold for traction failure
 mu_threshold = 0.45;

@@ -29,11 +29,12 @@ SOIL.kc    = 1400;   % N/m^2
 SOIL.kphi  = 830000; % N/m^3
 SOIL.phi   = 0.576;  % rad
 SOIL.c     = 170;    % N/m^2
+SOIL.K     = 0.02;   % m - Shear deformation modulus
 
 % Locomotion and Dense Soil Parameters
 c_f = 0.05;                % Coefficient of rolling friction
-SOIL.kc_dense   = SOIL.kc*1.5;  % N/m^2 (Assumed 5x "loose" state)
-SOIL.kphi_dense = SOIL.kphi*1.5; % N/m^3 (Assumed 5x "loose" state)
+SOIL.kc_dense   = SOIL.kc*1.5;  % N/m^2
+SOIL.kphi_dense = SOIL.kphi*1.5; % N/m^3
 SOIL.K_c = 33.37;          % Terzaghi cohesive modulus for lunar soil
 SOIL.K_gamma = 72.77;      % Terzaghi frictional modulus for lunar soil
 
@@ -44,17 +45,15 @@ rho_min_lunar = 1.27; %Used for converting RD's
 rho_max_lunar = 1.95; % "
 rho_i         = 1.3;
 
-% Pareto Optimization Weights [Total Mass, Energy, Mass Ratio, Freq Diff from 50Hz, traction margin]
-pareto_weights = [1, 0, 0.0, 0.0, 1]; %This is not really used anymore
+% Pareto Optimization Weights
+pareto_weights = [0, 0, 0.0, 0.0, 1]; 
 
 % Drive Wheel Locomotion Parameters
-DRIVE.Nw = 6;  % Number of drive wheels
-% DRIVE.D = 1.50; % Drive wheel diameter [m]
-DRIVE.b = 0.25;  % Drive wheel width [m]
-DRIVE.kwheel = 1e6;  % Radial stiffness [N/m]
-DRIVE.slip = 0.40; % Slip ratio [0 to 1]
-DRIVE.bulldozing_factor = 0.20; % Rb = factor * Rc
-DRIVE.K = 0.02; % Shear deformation modulus [m]
+DRIVE.Nw = 6;                     % Number of drive wheels
+DRIVE.b = 0.25;                   % Drive wheel width [m]
+DRIVE.h_g = 0.008;                % Grouser height [m]
+DRIVE.n_g = 18;                   % Number of grousers per wheel
+DRIVE.slip = 0.20;                % slip ratio [0 to 1]
 
 %% 2. Define the 7D Sweep Grid
 %Defines the sweep-space
@@ -328,20 +327,19 @@ function [rho_final, total_avg_power_W, total_passes, total_cycles, lc_avg_dynam
     F_loco_required_p1 = R_r_p1 + R_c_p1 + R_b_p1;
     
     % 2. Calculate Drive Wheel Capabilities
-    % Calculate normal load per drive wheel in Newtons (mass not used by rollers)
     W_drive_wheel = (m_rov * g_moon - W_roller * n_rollers) / DRIVE.Nw;
     
-    % Call the external wheel model with configuration parameters
-    drive_result = lunar_wheel_model(W_drive_wheel, DRIVE.D, DRIVE.b, DRIVE.kwheel, DRIVE.slip, DRIVE.bulldozing_factor, SOIL.kc, SOIL.kphi, SOIL.n, SOIL.c, rad2deg(SOIL.phi), DRIVE.K);
+    % Use unified wheel performance model
+    perf = calculate_wheel_performance(W_drive_wheel, DRIVE.D, DRIVE.b, DRIVE.h_g, DRIVE.n_g, DRIVE.slip, v_sim, SOIL);
     
     % Drawbar pull is the excess traction after wheel resistance is subtracted.
-    total_available_DBP = drive_result.drawbar_pull_DP_N * DRIVE.Nw;
+    total_available_DBP = perf.DBP * DRIVE.Nw;
     
     % 3. Fast Break Evaluation
     if total_available_DBP < F_loco_required_p1
         is_valid = false;
         rho_final = NaN; total_avg_power_W = NaN; total_passes = NaN; total_cycles = NaN; lc_avg_dynamic = NaN; total_energy_kWh = NaN;
-        return; % Exit the function early to save computation time
+        return; % Exit early
     end
 
     while rho < rho_f
@@ -382,14 +380,19 @@ function [rho_final, total_avg_power_W, total_passes, total_cycles, lc_avg_dynam
         term4_b = SOIL.c * l_o^2 * (1 + tan(pi/4 + SOIL.phi/2));
         R_b = term1_b * term2_b + term3_b + term4_b; 
         
-        F_loco = R_r + R_c + R_b; % Total forward force required
+        F_loco = R_r + R_c + R_b; % Total force required to push rollers
         max_F_loco = max(max_F_loco, F_loco);
+        
+        % Unified power calculation (Drive wheels + Roller resistance)
+        W_drive_wheel = (m_rov * g_moon - W_roller * n_rollers) / DRIVE.Nw;
+        perf = calculate_wheel_performance(W_drive_wheel, DRIVE.D, DRIVE.b, DRIVE.h_g, DRIVE.n_g, DRIVE.slip, v_sim, SOIL);
+        P_loco_pass = (F_loco + perf.R_wheel * DRIVE.Nw) * v_sim / (0.85 * 0.9);
         
         % Calculate Work for this pass
         d_pass = Apad / b_roller; % Distance traveled per pass
-        work_loco_pass = F_loco * d_pass; % Joules
-        
         t_pass = d_pass / v_sim; % Seconds driving
+        
+        work_loco_pass = P_loco_pass * t_pass; % Joules
         work_vib_pass = req_vib_power * t_pass; % Joules
         work_hotel_pass = P_hotel * t_pass; % Joules
         

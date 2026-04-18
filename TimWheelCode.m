@@ -1,178 +1,87 @@
 clc; clear; close all;
 
 %% ================= SOIL =================
-kc   = 1.4e6;
-kphi = 8.3e6;
-n    = 1.1;
-phi = deg2rad(35);
-c_soil = 170;
+% Standardized SI constants from ChenSweep.m
+SOIL.kc    = 1400;   % N/m^2 - Cohesive modulus
+SOIL.kphi  = 830000; % N/m^3 - Frictional modulus
+SOIL.n     = 1.0;    % Dimensionless - Sinkage exponent
+SOIL.phi   = 0.576;  % rad - Internal friction angle
+SOIL.c     = 170;    % Pa - Cohesion
+SOIL.gamma = 2470;   % N/m^3 - Soil density/gravity
+SOIL.K     = 0.02;   % m - Shear deformation modulus
 
-g = 1.62;
-
-W = 64.4 * g;
-Nw = 6;
+g_moon = 1.62;       % m/s^2 - Lunar gravity
+m_rov = 64.4;        % kg - Nominal rover mass
+W_total = m_rov * g_moon; % N - Total rover weight
+Nw = 6;              % Dimensionless - Number of wheels
 
 %% ================= DESIGN SPACE =================
-D_vec = linspace(0.10,0.25,40);
-b_vec = linspace(0.08,0.25,40);
+D_vec = linspace(0.10, 0.40, 30); % m - Wheel Diameter
+b_vec = linspace(0.10, 0.40, 30); % m - Wheel Width
 
 [Dg, bg] = meshgrid(D_vec, b_vec);
 
 %% ================= FIXED DESIGN ASSUMPTIONS =================
-h = 0.008;
-n_g = 18;
-
-eta = 0.85 * 0.9;
-v = 0.1;
+h_g = 0.008;       % m - Grouser height
+n_g = 18;          % Dimensionless - Number of grousers
+slip = 0.20;       % Dimensionless - Target slip ratio
+v = 0.1;           % m/s - Nominal velocity
 
 %% ================= OUTPUT MATRICES =================
-DBP_smooth = zeros(size(Dg));
 DBP_grouser = zeros(size(Dg));
-MU_grouser = zeros(size(Dg));
-E_per_m = zeros(size(Dg));
+MU_max = zeros(size(Dg));
+Power_req = zeros(size(Dg));
+z_soil = zeros(size(Dg));
 
 %% ================= MODEL SWEEP =================
+fprintf('Running wheel performance sweep...\n');
 for i = 1:numel(Dg)
-
     D = Dg(i);
     b = bg(i);
-
-    R = D/2;
-
-    k = kc + kphi*b;
-
-    z = (W/(k*D))^(1/(n+1));
-    l = sqrt(R*z);
-
-    A = b*l;
-
-    sigma = k*z^n;
-    tau = c_soil + sigma*tan(phi);
-
-    %% ---- BASE (NO GROUSERS) ----
-    F_base = tau * A;
-
-    %% ---- GROUSER ENHANCEMENT ----
-    p_g = (2*pi*R)/n_g;
-    w_g = 0.25*p_g;
-
-    mob = tanh(3*h/max(z,1e-6));
-
-    F_g = n_g * (tau*(w_g*b)*mob);
-
-    F_total = F_base + F_g;
-
-    DBP_grouser(i) = Nw * F_total;
-    DBP_smooth(i)  = Nw * F_base;
-
-    MU_grouser(i) = F_total / W;
-
-    %% ---- ENERGY PER METER ----
-    F_resist = DBP_grouser(i);
-
-    E_per_m(i) = F_resist / eta;   % J/m
+    
+    W_wheel = W_total / Nw; % N - Load per wheel
+    
+    % Call unified physics function
+    perf = calculate_wheel_performance(W_wheel, D, b, h_g, n_g, slip, v, SOIL);
+    
+    % Store Results
+    DBP_grouser(i) = perf.DBP * Nw; % Total DBP for rover
+    MU_max(i) = perf.MU_max;
+    Power_req(i) = perf.Power_req * Nw; % Total power for rover
+    z_soil(i) = perf.z_soil;
 end
 
-%% ================= PLOT 1: GROUSER EFFECT =================
-figure;
-surf(Dg, bg, DBP_smooth, 'EdgeColor','none'); hold on;
-surf(Dg, bg, DBP_grouser, 'EdgeColor','none','FaceAlpha',0.7);
+%% ================= VISUALIZATION =================
 
-xlabel('Wheel Diameter (m)');
-ylabel('Wheel Width (m)');
-zlabel('DBP (N)');
-title('Effect of Grousers on Drawbar Pull');
-legend('Smooth Wheel','With Grousers');
-grid on; view(135,25);
+% 1. 3D Surface: Drawbar Pull
+figure('Name', 'Drawbar Pull Analysis', 'Color', 'w');
+surf(Dg, bg, DBP_grouser, 'EdgeColor','none');
+xlabel('Wheel Diameter (m)'); ylabel('Wheel Width (m)'); zlabel('Total DBP (N)');
+title('Net Drawbar Pull vs. Wheel Geometry');
+colorbar; grid on; view(135, 25);
 
-%% ================= HEATMAP: DBP =================
-figure;
-imagesc(D_vec, b_vec, DBP_grouser);
-set(gca,'YDir','normal');
-colorbar;
-xlabel('Wheel Diameter (m)');
-ylabel('Wheel Width (m)');
-title('DBP Heatmap (With Grousers)');
+% 2. Heatmap: Traction Coefficient
+figure('Name', 'Traction Coefficient', 'Color', 'w');
+imagesc(D_vec, b_vec, MU_max);
+set(gca, 'YDir', 'normal');
+xlabel('Wheel Diameter (m)'); ylabel('Wheel Width (m)');
+title('Max Traction Coefficient (\mu_{max})');
+cb = colorbar; ylabel(cb, '\mu_{max}');
 
-%% ================= HEATMAP: TRACTION COEFFICIENT =================
-figure;
-imagesc(D_vec, b_vec, MU_grouser);
-set(gca,'YDir','normal');
-colorbar;
-xlabel('Wheel Diameter (m)');
-ylabel('Wheel Width (m)');
-title('Traction Coefficient (\mu) Heatmap');
+% 3. Heatmap: Power Requirement
+figure('Name', 'Locomotion Power', 'Color', 'w');
+imagesc(D_vec, b_vec, Power_req);
+set(gca, 'YDir', 'normal');
+xlabel('Wheel Diameter (m)'); ylabel('Wheel Width (m)');
+title('Total Locomotion Power (W)');
+cb = colorbar; ylabel(cb, 'Watts');
 
-%% ================= HEATMAP: ENERGY PER METER =================
-figure;
-imagesc(D_vec, b_vec, E_per_m);
-set(gca,'YDir','normal');
-colorbar;
-xlabel('Wheel Diameter (m)');
-ylabel('Wheel Width (m)');
-title('Energy per Meter (J/m) Heatmap');
+% 4. Heatmap: Soil Sinkage
+figure('Name', 'Soil Sinkage', 'Color', 'w');
+imagesc(D_vec, b_vec, z_soil * 1000);
+set(gca, 'YDir', 'normal');
+xlabel('Wheel Diameter (m)'); ylabel('Wheel Width (m)');
+title('Wheel Sinkage (mm)');
+cb = colorbar; ylabel(cb, 'mm');
 
-%% ================= GROUSER EFFECT PLOT (SIMPLE) =================
-figure;
-plot(D_vec, mean(DBP_grouser,1), 'LineWidth',2); hold on;
-plot(D_vec, mean(DBP_smooth,1), '--','LineWidth',2);
-
-xlabel('Wheel Diameter (m)');
-ylabel('DBP (N)');
-legend('With Grousers','Smooth Wheel');
-title('Why Grousers Matter (Averaged Effect)');
-grid on;
-
-%% ================= POWER MAP (2D) =================
-DBP_range = linspace(min(DBP_smooth(:)), max(DBP_grouser(:)), 50);
-v_range   = linspace(0.05, 0.5, 50);
-
-[DBPg, vg] = meshgrid(DBP_range, v_range);
-
-P = (DBPg .* vg) ./ eta;   % Watts
-
-P_kW = P / 1000;
-
-%% ================= HEATMAP =================
-figure;
-imagesc(DBP_range, v_range, P_kW);
-
-set(gca,'YDir','normal');
-colorbar;
-
-xlabel('Drawbar Pull (N)');
-ylabel('Velocity (m/s)');
-title('Power Requirement Map (DBP vs Velocity)');
-
-%% ================= HEATMAP =================
-figure;
-
-imagesc(DBP_range, v_range, P_kW);
-set(gca,'YDir','normal');
-
-cb = colorbar;
-ylabel(cb,'Power (kW)', ...
-    'FontName','Times New Roman', ...
-    'FontSize',12);
-
-xlabel('Drawbar Pull (N)', ...
-    'FontName','Times New Roman', ...
-    'FontSize',12);
-
-ylabel('Velocity (m/s)', ...
-    'FontName','Times New Roman', ...
-    'FontSize',12);
-
-title('Power Requirement Map (DBP vs Velocity)', ...
-    'FontName','Times New Roman', ...
-    'FontSize',12);
-
-hold on;
-
-%% ================= CONTOURS =================
-levels = [0.1 0.25 0.5 1 2 3]; % kW
-
-[C,h] = contour(DBPg, vg, P_kW, levels, 'k', 'LineWidth',1.2);
-
-clabel(C,h,'FontSize',10,'Color','k');
- 
+fprintf('Analysis complete.\n');
