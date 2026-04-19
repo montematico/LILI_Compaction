@@ -5,7 +5,7 @@
 clear; clc; close all;
 
 %% 1. Parameters & Data Loading
-target_idx = 12065; % Define target index at the top
+target_idx = 12053; % Define target index at the top
 
 % Load grid results
 if exist('SweepResults.mat', 'file')
