@@ -1,4 +1,4 @@
-clear; clc
+clear; clc; close all
 % Load the workspace containing grid sweep variables and simulation constants
 if isfile('LunarCompactionResults.mat')
     load('LunarCompactionResults.mat');
@@ -11,13 +11,31 @@ slope_deg = 10;
 safety_factor = 1.8;
 F_slope = M_ROV_GRID * g_moon * sin(deg2rad(slope_deg));
 
+% Add Grouser Params for Dynamic MU_max
+h_g = 0.008; % m
+n_g = 18;    % dimensionless
+slip_target = 0.20; 
+SOIL.K = 0.02; % m
+
+% Calculate MU_max for all grid points (Dynamic Limit)
+MU_max_all = zeros(size(M_ROV_GRID));
+fprintf('Calculating dynamic traction limits for all grid points...\n');
+for i = 1:numel(M_ROV_GRID)
+    if Valid_mask(i)
+        W_drive_total = M_ROV_GRID(i) * g_moon - (M_ROV_GRID(i) * g_moon * ROL_FRAC_GRID(i));
+        W_wheel = W_drive_total / DRIVE.Nw;
+        % Note: v_sim and SOIL should be in workspace from LunarCompactionResults.mat
+        perf = calculate_wheel_performance(W_wheel, D_WHEEL_GRID(i), DRIVE.b, h_g, n_g, slip_target, v_sim, SOIL);
+        MU_max_all(i) = perf.MU_max;
+    end
+end
+
 % 1. Filter for all valid designs
 % mu_req includes the force to overcome rollers + slope, scaled by safety factor
 mu_req_all = ((Max_Traction_results + F_slope) * safety_factor) ./ (M_ROV_GRID * g_moon);
 
-% Increased threshold to 1.1 to account for 1.8x SF and 10deg slope
-mu_threshold = 1.1; 
-candidates = find(Valid_mask & (mu_req_all < mu_threshold));
+% Dynamic threshold check: Required traction < Available traction
+candidates = find(Valid_mask & (mu_req_all < MU_max_all));
 
 if isempty(candidates)
     error('No designs found below the 0.45 traction limit. Consider increasing M_ROV_grid or R_ROLLER_grid ranges.');
@@ -90,10 +108,19 @@ end
 figure('Name', 'Design Space Tradeoffs', 'Color', 'w');
 
 hold on; grid on;
-% scatter(M_ROV_GRID(Valid_mask), mu_req_all(Valid_mask), 10, [0.8 0.8 0.8], 'filled'); % Background
-scatter(M_ROV_GRID(candidates), mu_req_all(candidates), 20, 'b'); % Safe
-plot(M_ROV_GRID(idx_utopia), mu_req_all(idx_utopia), 'p', 'MarkerFaceColor', 'r', 'MarkerSize', 15); % Utopia
-% yline(0.45, '--r', 'LineWidth', 1.5);
+% Plot all "Safe" candidates as reference
+scatter(M_ROV_GRID(candidates), mu_req_all(candidates), 20, [0.8 0.8 0.8], 'DisplayName', 'Safe Designs','MarkerEdgeColor','b');
+ylim([0,3.5]);
+% Loop through each comparison index and plot as a star
+colors = lines(length(comparison_indices)); % Get distinctive colors
+for i = 1:length(comparison_indices)
+    idx = comparison_indices(i);
+    plot(M_ROV_GRID(idx), mu_req_all(idx), 'p', ...
+        'MarkerFaceColor', colors(i,:), 'MarkerEdgeColor', 'k', ...
+        'MarkerSize', 15, 'DisplayName', labels{i});
+end
+
 xlabel('Total Rover Mass (kg)'); ylabel('Required Traction Coef. (\mu_{req})');
 title('Mass vs. Traction Coef.');
+legend('Location', 'best');
 

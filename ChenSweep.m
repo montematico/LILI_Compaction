@@ -1,12 +1,12 @@
 clear; clc; close all;
 clear updateProgress;
 
-%% 1. Constants and Setup
+% 1. Constants and Setup
 g_moon   = 1.62;      % m/s^2
 Apad     = 500;       % m^2
 Tavail_h = 1200;    % hours, total allowed compaction time for 1 pad - 6mon
 energy_max_kWh = 400;
-target_relative_density = 0.85;
+target_relative_density = 0.9;
 % roller_fraction = 0.3;
 n_rollers   = 2;
 bounce_margin = 1.8; %apparently this is fine
@@ -15,7 +15,7 @@ v_sim = 0.05;
 max_sinkage_ratio = 1.0; % Max allowable sinkage as a fraction of roller radius
 save_figures_to_disk = false; %Save .fig files
 dry_run = false; % Set to true to run only 10 combinations for testing
-P_hotel = 80; % Watts, baseline power
+P_hotel = 12; % Watts, baseline power
 battery_density_Wh_kg = 150; % Wh/kg
 max_battery_fraction = 0.8; % Max mass fraction for battery
 t_work_cycle_h = 6; % hours of work before recharge
@@ -29,11 +29,12 @@ SOIL.kc    = 1400;   % N/m^2
 SOIL.kphi  = 830000; % N/m^3
 SOIL.phi   = 0.576;  % rad
 SOIL.c     = 170;    % N/m^2
+SOIL.K     = 0.02;   % m - Shear deformation modulus
 
 % Locomotion and Dense Soil Parameters
 c_f = 0.05;                % Coefficient of rolling friction
-SOIL.kc_dense   = SOIL.kc*1.5;    % N/m^2 (Assumed 5x "loose" state)
-SOIL.kphi_dense = SOIL.kphi*1.5; % N/m^3 (Assumed 5x "loose" state)
+SOIL.kc_dense   = SOIL.kc*1.5;  % N/m^2
+SOIL.kphi_dense = SOIL.kphi*1.5; % N/m^3
 SOIL.K_c = 33.37;          % Terzaghi cohesive modulus for lunar soil
 SOIL.K_gamma = 72.77;      % Terzaghi frictional modulus for lunar soil
 
@@ -44,26 +45,25 @@ rho_min_lunar = 1.27; %Used for converting RD's
 rho_max_lunar = 1.95; % "
 rho_i         = 1.3;
 
-% Pareto Optimization Weights [Total Mass, Energy, Mass Ratio, Freq Diff from 50Hz, traction margin]
+% Pareto Optimization Weights
 pareto_weights = [0, 0, 0.0, 0.0, 1]; 
 
 % Drive Wheel Locomotion Parameters
 DRIVE.Nw = 6;                     % Number of drive wheels
-% DRIVE.D = 1.50;                   % Drive wheel diameter [m]
 DRIVE.b = 0.25;                   % Drive wheel width [m]
-DRIVE.kwheel = 1e6;               % Radial stiffness [N/m]
-DRIVE.slip = 0.40;                % Slip ratio [0 to 1]
-DRIVE.bulldozing_factor = 0.20;   % Rb = factor * Rc
-DRIVE.K = 0.02;                   % Shear deformation modulus [m]
+DRIVE.h_g = 0.008;                % Grouser height [m]
+DRIVE.n_g = 18;                   % Number of grousers per wheel
+DRIVE.slip = 0.20;                % slip ratio [0 to 1]
 
 %% 2. Define the 7D Sweep Grid
-f_range = linspace(30, 80, 3);
-m_eccentric_range = logspace(-4, log10(0.5e-2), 4);
-m_rov_range = linspace(20, 100, 10);
-mass_ratio_range = linspace(0.2, 0.8, 5);
-R_roller_range = linspace(0.07, 0.50, 5);
-roller_fraction_range = linspace(0.2, 0.6, 4);
-D_wheel_range = linspace(0.1, 0.6, 4);
+%Defines the sweep-space
+f_range = linspace(30, 80, 3); %hz
+m_eccentric_range = logspace(-4, log10(0.5e-2), 4); %kg-m
+m_rov_range = linspace(20, 100, 10); %kg
+mass_ratio_range = linspace(0.2, 0.8, 5); %
+R_roller_range = linspace(0.07, 0.50, 5); %
+roller_fraction_range = linspace(0.2, 0.6, 4); %distribution of weight btwn rollers and wheels
+D_wheel_range = linspace(0.1, 0.6, 4); %m
 
 [F_GRID, M_ECC_GRID, M_ROV_GRID, M_RATIO_GRID, R_ROLLER_GRID, ROL_FRAC_GRID, D_WHEEL_GRID] = ndgrid(f_range, m_eccentric_range, m_rov_range, mass_ratio_range, R_roller_range, roller_fraction_range, D_wheel_range);
 
@@ -198,7 +198,7 @@ else
     mass_ratio_vec = M_RATIO_GRID(valid_idx);
     f_vec = F_GRID(valid_idx);
 
-    % --- NEW: Calculate Required Traction Coefficient ---
+    % Calculate Required Traction Coefficient
     % mu_req = F_loco / W_total
     mu_req_vec = Max_Traction_results(valid_idx) ./ (m_rov_vec .* g_moon);
 
@@ -304,12 +304,8 @@ function [rho_final, total_avg_power_W, total_passes, total_cycles, lc_avg_dynam
     KE_peak = (m_eccentric * omega)^2 / (2 * m_drum);
     req_vib_power = (KE_peak * f) / eta_mech;
 
-    % =========================================================================
-    % PASS 1 FAST-BREAK TRACTION CHECK
-    % Calculate the resistance the roller will experience on the very first pass 
-    % using baseline (loose) soil moduli. If the drive wheels cannot overcome 
-    % this initial resistance, discard the design immediately.
-    % =========================================================================
+    % PASS 1 FAST-BREAK TRACTION CHECK: Discards design if first pass
+    % cannot produce enough traction to move
     
     % 1. Roller Sinkage & Resistance on Pass 1
     z_pass1 = calculate_tandem_sinkage(W_roller, b_roller, D_roller, SOIL.kc, SOIL.kphi, n_rollers);
@@ -331,22 +327,20 @@ function [rho_final, total_avg_power_W, total_passes, total_cycles, lc_avg_dynam
     F_loco_required_p1 = R_r_p1 + R_c_p1 + R_b_p1;
     
     % 2. Calculate Drive Wheel Capabilities
-    % Calculate normal load per drive wheel in Newtons (mass not used by rollers)
     W_drive_wheel = (m_rov * g_moon - W_roller * n_rollers) / DRIVE.Nw;
     
-    % Call the external wheel model with configuration parameters
-    drive_result = lunar_wheel_model(W_drive_wheel, DRIVE.D, DRIVE.b, DRIVE.kwheel, DRIVE.slip, DRIVE.bulldozing_factor, SOIL.kc, SOIL.kphi, SOIL.n, SOIL.c, rad2deg(SOIL.phi), DRIVE.K);
+    % Use unified wheel performance model
+    perf = calculate_wheel_performance(W_drive_wheel, DRIVE.D, DRIVE.b, DRIVE.h_g, DRIVE.n_g, DRIVE.slip, v_sim, SOIL);
     
     % Drawbar pull is the excess traction after wheel resistance is subtracted.
-    total_available_DBP = drive_result.drawbar_pull_DP_N * DRIVE.Nw;
+    total_available_DBP = perf.DBP * DRIVE.Nw;
     
     % 3. Fast Break Evaluation
     if total_available_DBP < F_loco_required_p1
         is_valid = false;
         rho_final = NaN; total_avg_power_W = NaN; total_passes = NaN; total_cycles = NaN; lc_avg_dynamic = NaN; total_energy_kWh = NaN;
-        return; % Exit the function early to save computation time
+        return; % Exit early
     end
-    % =========================================================================
 
     while rho < rho_f
         current_pass = current_pass + 1;
@@ -386,14 +380,19 @@ function [rho_final, total_avg_power_W, total_passes, total_cycles, lc_avg_dynam
         term4_b = SOIL.c * l_o^2 * (1 + tan(pi/4 + SOIL.phi/2));
         R_b = term1_b * term2_b + term3_b + term4_b; 
         
-        F_loco = R_r + R_c + R_b; % Total forward force required
+        F_loco = R_r + R_c + R_b; % Total force required to push rollers
         max_F_loco = max(max_F_loco, F_loco);
+        
+        % Unified power calculation (Drive wheels + Roller resistance)
+        W_drive_wheel = (m_rov * g_moon - W_roller * n_rollers) / DRIVE.Nw;
+        perf = calculate_wheel_performance(W_drive_wheel, DRIVE.D, DRIVE.b, DRIVE.h_g, DRIVE.n_g, DRIVE.slip, v_sim, SOIL);
+        P_loco_pass = (F_loco + perf.R_wheel * DRIVE.Nw) * v_sim / (0.85 * 0.9);
         
         % Calculate Work for this pass
         d_pass = Apad / b_roller; % Distance traveled per pass
-        work_loco_pass = F_loco * d_pass; % Joules
-        
         t_pass = d_pass / v_sim; % Seconds driving
+        
+        work_loco_pass = P_loco_pass * t_pass; % Joules
         work_vib_pass = req_vib_power * t_pass; % Joules
         work_hotel_pass = P_hotel * t_pass; % Joules
         
@@ -408,7 +407,8 @@ function [rho_final, total_avg_power_W, total_passes, total_cycles, lc_avg_dynam
             n_total = n_total + 1;
             sum_lc = sum_lc + lc;
             
-            % --- INLINED PHYSICS ---
+            % INLINED PHYSICS  
+            % (originally this was seperate functions but thats very slow)
             rho_e = 1.63 + (rho - 1.27) * rho_slope;
             if rho_e < 1.63, rho_e = 1.63; elseif rho_e > 2.15, rho_e = 2.15; end
             Pb = 0.07932 * (100*rho_e - 184)^2 * (A_col * A_chen_inv);
@@ -425,7 +425,6 @@ function [rho_final, total_avg_power_W, total_passes, total_cycles, lc_avg_dynam
                 xcr = term1_xcr * term2_xcr + (Pb/ks - Pb/ksu);
                 xcr = max(0, xcr);
             end
-            % -----------------------
 
             if xcr > xcr_threshold
                 is_valid = false;
@@ -542,6 +541,5 @@ function updateProgress(total)
     end
     count = count + 50;
     pct = (count / total) * 100;
-    % Use \r to overwrite the line for a cleaner look
     fprintf('Progress: %.2f%% (%d of %d)\n', pct, count, total);
 end

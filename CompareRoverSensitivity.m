@@ -8,35 +8,26 @@ clear; clc; close all;
 % Load the workspace containing grid sweep variables and simulation constants
 % Using LunarCompactionResults.mat instead of SweepResults.mat per project logic
 if isfile('LunarCompactionResults.mat')
-    load('LunarCompactionResults.mat', 'M_ROV_GRID', 'R_ROLLER_GRID', 'ROL_FRAC_GRID', 'SOIL', 'g_moon', 'c_f');
-elseif isfile('SweepResults.mat')
-    load('SweepResults.mat', 'M_ROV_GRID', 'R_ROLLER_GRID', 'ROL_FRAC_GRID', 'SOIL', 'g_moon', 'c_f');
+    load('LunarCompactionResults.mat', 'M_ROV_GRID', 'R_ROLLER_GRID', 'ROL_FRAC_GRID', 'SOIL', 'g_moon', 'c_f','n_rollers','b_roller','DRIVE','v_sim');
 else
     error('Could not find results .mat file.');
 end
 
+% Standard Traction Configuration
+slope_deg = 10;      % degrees - assumed design slope
+safety_factor = 1.8; % SF for traction
+
 % Define target indices for light, medium, and heavy rover designs
-% target_indices = [12137, 53, 65, 716]; 
-target_indices = [36137,12065,12716,24266];
-labels = {'Minimum mass', ...
-          'Robust in bottom 25% of mass', ...
-          'Traction robust', ...
-          'Utopia Compromise'};
+target_indices = [12126,12716,12053,12150,36494];
+labels = {'Minimum mass', 'Maximum Traction Margin','Balanced (Mass \mu)', 'Balanced  25%th mass', 'Balanced (Mass,\mu,wheel d,energy)'};
 
-% Threshold for traction failure
-mu_threshold = 0.45;
-
-%% Core Task: Soil Degradation Loop
-% ... (rest of the calculation loop remains same)
-% Soil modulus shifts from -40% weaker to +10% stronger
-soil_mod_shifts = linspace(-0.4, 0.1, 10);
+%% Soil Degradation Loop
+% Soil modulus shifts from -40% weaker to +40% stronger
+soil_mod_shifts = linspace(-0.4, 0.4, 30);
 
 % Initialize results matrix (Rows: Rovers, Columns: Shifts)
 mu_req_results = zeros(length(target_indices), length(soil_mod_shifts));
-
-% Predefined assumptions based on the prompt
-n_rollers = 2;
-b_roller = 0.3;
+mu_limits = zeros(length(target_indices), 1); % Store dynamic MU_max for each design
 
 for i = 1:length(target_indices)
     idx = target_indices(i);
@@ -53,6 +44,12 @@ for i = 1:length(target_indices)
     % Derived parameters
     D_roller = R_roller_opt * 2;
     W_roller = (m_opt * g_moon * roller_fraction) / n_rollers;
+
+    % Calculate design-specific MU_max using nominal soil
+    % W_wheel for traction check: assume mass is distributed over drive wheels
+    W_wheel_nom = (m_opt * g_moon) / DRIVE.Nw;
+    perf = calculate_wheel_performance(W_wheel_nom, D_roller, DRIVE.b, DRIVE.h_g, DRIVE.n_g, DRIVE.slip, v_sim, SOIL);
+    mu_limits(i) = perf.MU_max;
     
     for j = 1:length(soil_mod_shifts)
         shift = soil_mod_shifts(j);
@@ -82,8 +79,8 @@ for i = 1:length(target_indices)
         
         F_loco_p1 = R_r + R_c + R_b;
         
-        % Calculate required coefficient of friction
-        mu_req = F_loco_p1 / (m_opt * g_moon);
+        % Calculate required coefficient of friction (incl. slope and SF)
+        mu_req = ((F_loco_p1 + (m_opt * g_moon * sin(deg2rad(slope_deg)))) * safety_factor) / (m_opt * g_moon);
         mu_req_results(i, j) = mu_req;
     end
 end
@@ -94,29 +91,14 @@ hold on; grid on;
 
 % Plot results for each rover
 colors = lines(length(target_indices));
-markers = {'o', 's', '^', 'd', 'v', 'p', 'h'};
 for i = 1:length(target_indices)
+    % Required Traction Curve
     plot(soil_mod_shifts * 100, mu_req_results(i, :), '-', ...
-         'Color', colors(i,:), 'Marker', markers{i}, 'MarkerFaceColor', colors(i,:), ...
-         'LineWidth', 2, 'DisplayName', labels{i});
+       'Color', colors(i,:), 'LineWidth', 2, 'DisplayName', labels{i});
+   
+    % Individual Traction Limit Line
+    % yline(mu_limits(i), '--', 'Color', colors(i,:), 'LineWidth', 1.5, 'HandleVisibility', 'off');
 end
-
-% Add horizontal dashed red line at y = mu_threshold with dynamic TeX label
-ytext = sprintf('Traction Failure Limit (\\mu = %0.2f)', mu_threshold);
-hY = yline(mu_threshold, 'r--', 'LineWidth', 2, ...
-           'LabelHorizontalAlignment', 'left', 'HandleVisibility', 'off');
-set(hY, 'Label', ytext, 'Interpreter', 'tex');
-
-% Optional: Shaded red patch covering the "Danger Zone"
-x_lims = [min(soil_mod_shifts * 100), max(soil_mod_shifts * 100)];
-y_lims = ylim;
-if y_lims(2) < mu_threshold + 0.1
-    y_lims(2) = mu_threshold + 0.1;
-    ylim(y_lims);
-end
-patch([x_lims(1) x_lims(2) x_lims(2) x_lims(1)], ...
-      [mu_threshold mu_threshold y_lims(2) y_lims(2)], ...
-      'r', 'FaceAlpha', 0.1, 'EdgeColor', 'none', 'HandleVisibility', 'off');
 
 % IMPORTANT: Set X-axis direction to 'reverse'
 set(gca, 'XDir', 'reverse');
@@ -124,9 +106,10 @@ set(gca, 'XDir', 'reverse');
 % Formatting
 xlabel('Soil Strength Degradation (%)', 'FontWeight', 'bold');
 ylabel('Required Traction Coefficient (\mu_{req})', 'FontWeight', 'bold');
-title('Rover Robustness: Traction Risk in Degraded Lunar Soil', 'FontWeight', 'bold', 'FontSize', 12);
+title('Rover Robustness: Traction Risk (Dynamic Limits)', 'FontWeight', 'bold', 'FontSize', 12);
+subtitle(sprintf('Limits (dashed) vs Req. Traction (solid). Incl. %d^o Slope + SF %.1f', slope_deg, safety_factor));
 legend('Location', 'best');
-xlim(x_lims);
+xlim([min(soil_mod_shifts * 100), max(soil_mod_shifts * 100)]);
 
 hold off;
 

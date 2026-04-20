@@ -35,28 +35,21 @@ beta_deg = 0.0; % slope angle [deg]
 % K = 0.02; % shear deformation modulus [m]
 % Simple bulldozing approximation
 % bulldozing_factor = 0.20; % Rb = bulldozing_factor * Rc
-%% -----------------------------
+
 % 2) CONSTANTS
-% ------------------------------
 g_moon = 1.62; % lunar gravity [m/s^2]
 beta = deg2rad(beta_deg);
 phi = deg2rad(phi_deg);
-%% -----------------------------
+
 % 3) LOAD PER WHEEL
-% ------------------------------
 % W = m * g_moon / Nw; % normal load per wheel [N]
-%% -----------------------------
 % 4) BASIC GEOMETRY
-% ------------------------------
 r = D / 2.0; % wheel radius [m]
-%% -----------------------------
+
 % 5) WHEEL DEFLECTION
-% ------------------------------
 delta = W / kwheel; % wheel radial deflection [m]
-%% -----------------------------
-% 6) SOLVE FOR SOIL SINKAGE
-% ------------------------------
-% We solve:
+%  SOLVE FOR SOIL SINKAGE
+% solve:
 % W / (b*l(z)) = (kc/b + kphi) * z^n
 %
 % where contact length:
@@ -68,33 +61,21 @@ z_soil = fzero(sinkage_fun, z_guess, options);
 % keep it physically reasonable
 z_soil = max(z_soil, 0.0);
 z_soil = min(z_soil, 0.99 * 2 * r);
-%% -----------------------------
 % 7) TOTAL EFFECTIVE SINKAGE
-% ------------------------------
 z_total = z_soil + delta;
-%% -----------------------------
 % 8) CONTACT GEOMETRY
-% ------------------------------
 l = contact_length(z_soil, r); % contact length [m]
 A = b * l; % approximate contact area [m^2]
 p = W / A; % average normal pressure [Pa]
-%% -----------------------------
 % 9) COMPACTION RESISTANCE
-% ------------------------------
 % Beginner-friendly first estimate:
 % Rc = b * (kc/b + kphi) * z^(n+1)/(n+1)
 Rc = b * (kc / b + kphi) * z_soil^(n + 1) / (n + 1);
-%% -----------------------------
 % 10) BULLDOZING RESISTANCE
-% ------------------------------
 Rb = bulldozing_factor * Rc;
-%% -----------------------------
 % 11) GRADE RESISTANCE
-% ------------------------------
 Rg = W * sin(beta);
-%% -----------------------------
 % 12) TRACTION MODEL
-% ------------------------------
 % Simple beginner approximation:
 % j = slip * l
 % tau = (c + p*tan(phi)) * (1 - exp(-j/K))
@@ -102,13 +83,9 @@ Rg = W * sin(beta);
 j = slip * l; % approximate shear displacement [m]
 tau = (c + p * tan(phi)) * (1.0 - exp(-j / K));
 H = tau * A;
-%% -----------------------------
 % 13) DRAWBAR PULL
-% ------------------------------
 DP = H - (Rc + Rb + Rg);
-%% -----------------------------
 % 14) STORE OUTPUTS
-% ------------------------------
 result.W_per_wheel_N = W;
 result.radius_m = r;
 result.soil_sinkage_m = z_soil;
@@ -124,9 +101,8 @@ result.compaction_resistance_Rc_N = Rc;
 result.bulldozing_resistance_Rb_N = Rb;
 result.grade_resistance_Rg_N = Rg;
 result.drawbar_pull_DP_N = DP;
-%% -----------------------------
-% 15) PRINT RESULTS
-% ------------------------------
+
+% PRINT RESULTS
 % fprintf('\nLUNAR WHEEL MODEL RESULTS\n');
 % fprintf('-------------------------------\n');
 % fprintf('Wheel load W = %.6f N\n', result.W_per_wheel_N);
@@ -143,9 +119,8 @@ result.drawbar_pull_DP_N = DP;
 % fprintf('Grade resistance Rg = %.6f N\n', result.grade_resistance_Rg_N);
 % fprintf('Drawbar pull DP = %.6f N\n', result.drawbar_pull_DP_N);
 end
-%% =========================================
+
 % LOCAL FUNCTIONS
-% ==========================================
 function f = sinkage_equation(z, W, r, b, kc, kphi, n)
 z = max(z, 1e-8);
 l = contact_length(z, r);

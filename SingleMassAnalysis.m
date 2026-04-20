@@ -5,7 +5,7 @@
 clear; clc; close all;
 
 %% 1. Parameters & Data Loading
-target_idx = 12137; % Define target index at the top
+target_idx = 12053; % Define target index at the top
 
 % Load grid results
 if exist('SweepResults.mat', 'file')
@@ -42,11 +42,25 @@ end
 
 % Re-derive dependent parameters for the simulation
 D_roller_opt = 2 * R_roller_opt;
+
+% Add Variable Fallbacks
+if ~exist('n_rollers', 'var'), n_rollers = 2; end
+if ~exist('b_roller', 'var'), b_roller = 0.3; end
+
+% Add Mission Parameters & Grousers
+h_g = 0.008; % m - Height of grousers on drive wheels
+n_g = 18;    % dimensionless - Number of grousers per wheel
+slip_target = 0.20; % dimensionless - Target slip for traction check
+SOIL.K = 0.02; % m - Shear deformation modulus
+
 W_roller_opt = (m_opt * g_moon * roller_fraction_opt) / n_rollers; 
 
 % Update DRIVE struct for this iteration
 DRIVE_opt = DRIVE;
 DRIVE_opt.D = D_wheel_opt;
+DRIVE_opt.h_g = h_g;
+DRIVE_opt.n_g = n_g;
+DRIVE_opt.slip = slip_target;
 
 fprintf('--- Single Mass Analysis (Target Index: %d) ---\n', target_idx);
 fprintf('Mass: %.2f kg, Freq: %.2f Hz, Mass Ratio: %.2f, Radius: %.2f m\n', m_opt, f_opt, mass_ratio_opt, R_roller_opt);
@@ -86,48 +100,50 @@ fprintf('Specific Energy (SE): %.2f J/kg\n', SE);
 fprintf('Required Battery Mass: %.2f kg\n', m_battery_req);
 fprintf('Peak C-Rate: %.2f C\n', C_rate_peak);
 
-%% Core Task 3: Soil Uncertainty & Traction Margin
-soil_mod_shifts = linspace(-0.3, 0.3, 5);
-mu_req_hist = zeros(size(soil_mod_shifts));
-traction_fail = false(size(soil_mod_shifts));
+%% Core Task 3: Print Specification Table
+max_sinkage_mm = max(hist.z_hist) * 1000;
+max_F_loco = max(hist.F_loco_hist);
+total_passes = length(hist.rho_hist) - 1;
+total_time_hr = hist.t_total / 3600;
 
-for i = 1:length(soil_mod_shifts)
-    shift = soil_mod_shifts(i);
-    kc_test = SOIL.kc * (1 + shift);
-    kphi_test = SOIL.kphi * (1 + shift);
-    
-    % Test max required traction force (from Pass 1 or similar logic)
-    % Re-calculating F_loco for pass 1 with shifted moduli
-    z_p1 = calculate_tandem_sinkage(W_roller_opt, b_roller, D_roller_opt, kc_test, kphi_test, n_rollers);
-    
-    alpha_arg = max(-1, min(1, 1 - 2*z_p1/D_roller_opt));
-    alpha = max(acos(alpha_arg), 1e-6);
-    l_o = z_p1 * tan(pi/4 - SOIL.phi/2)^2;
-    
-    R_r = (W_roller_opt * n_rollers) * c_f;
-    R_c = 0.5 * (kc_test + b_roller * kphi_test) * z_p1^2 * n_rollers;
-    
-    term1_b = (b_roller * sin(alpha + SOIL.phi)) / (2 * sin(alpha) * cos(SOIL.phi));
-    term2_b = 2 * z_p1 * SOIL.c * SOIL.K_c + SOIL.gamma * z_p1^2 * SOIL.K_gamma;
-    term3_b = (l_o^3 * SOIL.gamma / 3) * (pi/2 - SOIL.phi);
-    term4_b = SOIL.c * l_o^2 * (1 + tan(pi/4 + SOIL.phi/2));
-    R_b = term1_b * term2_b + term3_b + term4_b;
-    
-    F_loco_p1 = R_r + R_c + R_b;
-    mu_req = F_loco_p1 / (m_opt * g_moon);
-    
-    mu_req_hist(i) = mu_req;
-    if mu_req > 0.45
-        traction_fail(i) = true;
-    end
-end
+% Calculate Final Wheel Specs for Table
+W_drive_wheel = (m_opt * g_moon - W_roller_opt * n_rollers) / DRIVE_opt.Nw;
+final_perf = calculate_wheel_performance(W_drive_wheel, DRIVE_opt.D, DRIVE_opt.b, DRIVE_opt.h_g, DRIVE_opt.n_g, DRIVE_opt.slip, v_sim, SOIL);
 
-fprintf('\n--- Soil Sensitivity Analysis ---\n');
-for i = 1:length(soil_mod_shifts)
-    status = "OK";
-    if traction_fail(i), status = "TRACTION FAILURE"; end
-    fprintf('Shift: %+.0f%%, Required Mu: %.3f [%s]\n', soil_mod_shifts(i)*100, mu_req_hist(i), status);
-end
+fprintf('\n========================================================\n');
+fprintf('         LUNAR COMPACTION ROVER SPECIFICATIONS          \n');
+fprintf('========================================================\n');
+
+fprintf('\n--- Physical & Geometric ---\n');
+fprintf('%-30s : %8.2f kg\n', 'Total Rover Mass', m_opt);
+fprintf('%-30s : %8.2f kg\n', 'Static Load per Roller', W_roller_opt/g_moon);
+fprintf('%-30s : %8.2f m\n', 'Roller Diameter', D_roller_opt);
+fprintf('%-30s : %8.2f m\n', 'Drive Wheel Diameter', D_wheel_opt);
+fprintf('%-30s : %8.2f %%\n', 'Roller Mass Fraction', roller_fraction_opt * 100);
+fprintf('%-30s : %8.2f mm\n', 'Grouser Height', h_g * 1000);
+
+fprintf('\n--- Vibration System ---\n');
+fprintf('%-30s : %8.2f Hz\n', 'Operating Frequency', f_opt);
+fprintf('%-30s : %8.2f kg\n', 'Eccentric Mass/Unbalance', m_eccentric_opt);
+fprintf('%-30s : %8.2f\n', 'Dynamic Drum Mass Ratio', mass_ratio_opt);
+
+fprintf('\n--- Performance & Mission ---\n');
+fprintf('%-30s : %8d\n', 'Total Passes', total_passes);
+fprintf('%-30s : %8.2f hr\n', 'Total Mission Time', total_time_hr);
+fprintf('%-30s : %8.2f mm\n', 'Maximum Sinkage', max_sinkage_mm);
+fprintf('%-30s : %8.2f N\n', 'Max Roller Resistance', max_F_loco);
+fprintf('%-30s : %8.3f\n', 'Max Traction Coeff (MU_max)', final_perf.MU_max);
+fprintf('%-30s : %8.2f N\n', 'Net Drawbar Pull (DBP)', final_perf.DBP * DRIVE_opt.Nw);
+
+fprintf('\n--- Power & Energy ---\n');
+fprintf('%-30s : %8.2f W\n', 'Max Locomotion Power', max(hist.P_loco_hist));
+fprintf('%-30s : %8.2f W\n', 'Max Vibration Power', max(hist.P_vib_hist));
+fprintf('%-30s : %8.2f W\n', 'Peak Total System Power', P_peak);
+fprintf('%-30s : %8.2f kWh\n', 'Total Energy Consumption', total_energy_kWh);
+fprintf('%-30s : %8.2f J/kg\n', 'Specific Energy', SE);
+fprintf('%-30s : %8.2f kg\n', 'Required Battery Mass', m_battery_req);
+fprintf('%-30s : %8.2f C\n', 'Peak C-Rate', C_rate_peak);
+fprintf('========================================================\n');
 
 %% Core Task 4: Plotting Generation
 % 1. Compaction Evolution (2-Panel Subplot)
@@ -157,15 +173,6 @@ bar(1:length(hist.P_loco_hist), bar_data, 'stacked');
 grid on; xlabel('Pass Number'); ylabel('Power (W)');
 legend('Locomotion', 'Vibration', 'Hotel');
 title('Power Breakdown per Pass');
-
-% 3. Soil Sensitivity Plot
-figure('Name', 'Soil Sensitivity', 'Color', 'w');
-plot(soil_mod_shifts*100, mu_req_hist, '-d', 'LineWidth', 1.5, 'MarkerSize', 8);
-hold on;
-yline(0.45, 'r--', 'Traction Limit (0.45)', 'LineWidth', 2);
-grid on; xlabel('% Change in Soil Moduli (kc, kphi)'); ylabel('Required \mu');
-title('Soil Uncertainty & Traction Margin');
-ylim([0, max(max(mu_req_hist)*1.1, 0.5)]);
 
 %% Local Function: run_detailed_sim
 function [hist, is_valid] = run_detailed_sim(W_roller, b_roller, D_roller, m_eccentric, f, v_sim, mass_ratio, m_rov, target_relative_density, bounce_margin, h_layer, SOIL, eta_mech, nu, rho_min_lunar, rho_max_lunar, rho_i, Apad, n_rollers, c_f, g_moon, P_hotel, battery_density_Wh_kg, max_battery_fraction, t_work_cycle_h, max_sinkage_ratio, DRIVE)
@@ -242,8 +249,16 @@ function [hist, is_valid] = run_detailed_sim(W_roller, b_roller, D_roller, m_ecc
         d_pass = Apad / b_roller;
         t_pass = d_pass / v_sim;
         
-        % Power for this pass
-        P_loco = F_loco * v_sim; % F * v = Power
+        % Calculate Wheel Performance & Power
+        W_drive_wheel = (m_rov * g_moon - W_roller * n_rollers) / DRIVE.Nw;
+        % The wheels must overcome roller resistance PLUS their own resistance
+        % We call the model with zero slip to get the "required" effort, 
+        % or more accurately, we calculate resistance and then add it to roller load.
+        perf = calculate_wheel_performance(W_drive_wheel, DRIVE.D, DRIVE.b, DRIVE.h_g, DRIVE.n_g, DRIVE.slip, v_sim, SOIL);
+        
+        % Total Power = (Roller Force + Wheel Resistance) * v / eta
+        P_loco = (F_loco + perf.R_wheel * DRIVE.Nw) * v_sim / (0.85 * 0.9);
+        
         P_vib = req_vib_power;
         P_hotel_val = P_hotel;
         
