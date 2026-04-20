@@ -73,7 +73,7 @@ def micro_bounce_from_mer(mer, f, m_r=m_r_default, Dr=0.65):
 mer_arr = np.linspace(0.001, 0.025, 500)
 figA, axA = plt.subplots(figsize=(10, 6))
 
-frequencies_plotA = np.linspace(10, 50, 8)
+frequencies_plotA = np.linspace(10, 80, 8)
 colors_plotA = plt.cm.RdYlGn_r(np.linspace(0, 1, len(frequencies_plotA)))
 
 for freq, color in zip(frequencies_plotA, colors_plotA):
@@ -94,7 +94,7 @@ plt.tight_layout()
 Fc_abs = np.linspace(0, 500, 500)
 figB, axB = plt.subplots(figsize=(8, 5))
 
-frequencies_plotB = np.linspace(10, 50, 8)
+frequencies_plotB = np.linspace(30, 80, 10)
 colors_plotB = plt.cm.RdYlGn_r(np.linspace(0, 1, len(frequencies_plotB)))
 
 for freq, color in zip(frequencies_plotB, colors_plotB):
@@ -113,7 +113,7 @@ plt.tight_layout()
 Fc_ratio = np.linspace(1, 15, 500)
 figC, axC = plt.subplots(figsize=(8, 5))
 
-masses_plotC = [15, 25, 35, 50, 75, 100]
+masses_plotC = [20, 25, 35, 50, 75, 100]
 colors_plotC = plt.cm.viridis(np.linspace(0, 1, len(masses_plotC)))
 f_test = 70 
 
@@ -288,7 +288,7 @@ figH, axH = plt.subplots(figsize=(10, 7))
 figH.subplots_adjust(left=0.10, right=0.84, bottom=0.22, top=0.93)
 axH_force = axH.twinx()
 
-frequencies_grid = np.linspace(10, 50, 100)
+frequencies_grid = np.linspace(10, 80, 100)
 ratios_grid = np.linspace(1, 15, 100)
 F_grid, R_grid = np.meshgrid(frequencies_grid, ratios_grid)
 
@@ -320,7 +320,7 @@ def draw_heatmap(m):
     contour = axH.contourf(F_grid, R_grid, P_grid, levels=50, cmap=cmapH, norm=normH)
     axH.contour(F_grid, R_grid, P_grid, levels=[100], colors='k', linewidths=2.0, linestyles='--')
 
-    axH.set_xlim(10, 50)
+    axH.set_xlim(10, 80)
     axH.set_ylim(1, 15)
     axH.set_title(f'Interactive Operating Map ({m:.1f} kg Rover)')
     axH.set_xlabel('Frequency (Hz)')
@@ -330,10 +330,10 @@ def draw_heatmap(m):
     update_force_axis(m)
     return contour
 
-initial_mass = 35.0
+initial_mass = 65.0
 contourH = draw_heatmap(initial_mass)
 # Place colorbar in a dedicated axis to keep it fully outside the plot area.
-caxH = figH.add_axes([0.87, 0.22, 0.02, 0.71])
+caxH = figH.add_axes([0.91, 0.22, 0.02, 0.71])
 cbarH = figH.colorbar(contourH, cax=caxH, label='Percent of Limit (%)')
 cbarH.ax.axhline(100, color='k', lw=2, linestyle='--')
 
