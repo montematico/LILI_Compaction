@@ -34,7 +34,9 @@ The codebase is organized into several interconnected scripts:
 
 - **`ChenSweep.m`**: The core simulation engine. It performs a massive 7D grid search over design parameters. It uses parallel computing to evaluate thousands of rover configurations, filters out invalid designs (e.g., those that take too long, use too much energy, or get stuck), and performs Pareto optimization to identify the optimal frontier of designs.
 - **`CompactionChen.m`**: A simplified, single-configuration test script. It runs the simulation for one specific set of parameters and outputs a clean productivity table. Great for debugging the core physics loop.
-- **`lunar_wheel_model.m`**: A standalone terramechanics model that evaluates the tractive capabilities of the rover's drive wheels. It calculates drawbar pull based on Bekker pressure-sinkage and Janosi-Hanamoto shear laws.
+- **`lunar_wheel_model.m`**: A legacy standalone terramechanics model that evaluates the tractive capabilities of the rover's drive wheels.
+- **`calculate_wheel_performance.m`**: The new consolidated terramechanics model used for drive wheels. It includes grouser enhancement physics, internal rolling resistance, and unified power calculations.
+- **`TimWheelCode.m`**: A script for sweeping wheel diameter and width using the `calculate_wheel_performance` model to visualize optimal wheel geometry independent of the full rover sweep.
 - **`IdxSelect.m`**: A helper script that parses the massive results dataset from `ChenSweep.m` and selects specific "archetype" designs of interest, such as the "Minimum Mass Survivor," the "Balanced Design," and the "Maximum Traction Margin" tank.
 - **`CompareRoverSensitivity.m`**: Evaluates the selected optimal rovers under degraded, highly uncertain soil conditions. It alters the soil moduli ($k_c, k_\phi$) by $\pm X\%$ to see which designs are most likely to fail (get stuck) if the regolith is looser than expected.
 - **`SingleMassAnalysis.m`**: A deep-dive script that takes a single optimal design and runs a high-fidelity, pass-by-pass analysis. It tracks how density, sinkage, power draw, and required traction evolve over time as the soil stiffens.
@@ -89,24 +91,42 @@ $$F_{loco} = R_r + R_c + R_b$$
 
 ### 3. Drive Wheel Traction Model
 
-The `lunar_wheel_model.m` calculates if the drive wheels can generate enough Gross Traction ($H$) to overcome the resistances. It utilizes the Janosi-Hanamoto shear stress equation:
+The `calculate_wheel_performance.m` script calculates if the drive wheels can generate enough Gross Traction ($F_{gross}$) to overcome the resistances. It utilizes a two-part model:
+
+**A. Base Soil Shear (Janosi-Hanamoto):**
+The shear stress $\tau$ is calculated based on soil cohesion $c$ and internal friction angle $\phi$:
 $$\tau = (c + p \tan\phi) (1 - e^{-j/K})$$
 Where:
 - $p = W/A$ is the average normal pressure.
 - $j = slip \cdot l$ is the shear displacement.
 - $K$ is the shear deformation modulus.
 
-The Gross Traction is $H = \tau A$. The **Drawbar Pull (DP)**—the actual usable force for moving the vehicle—is:
-$$DP = H - (R_c + R_b + R_g)$$
-If the required locomotion force $F_{loco}$ exceeds the available Drawbar Pull, the rover gets stuck, and the design is marked invalid.
+The base traction is $F_{base} = \tau A$.
+
+**B. Grouser Enhancement (Tim's Model):**
+The wheels are equipped with $n_g$ grousers of height $h_g$. These provide additional mechanical interlock with the soil:
+$$F_g = n_g \cdot (\tau \cdot (w_g \cdot b) \cdot mob)$$
+Where:
+- $w_g$ is the effective grouser face width.
+- $mob = \tanh(3 h_g / z)$ is a mobility factor that accounts for how well the grousers penetrate the soil relative to the wheel sinkage $z$.
+
+The **Total Gross Traction** is $F_{gross} = F_{base} + F_g$.
+
+The **Drawbar Pull (DP)**—the actual usable force for moving the vehicle—is:
+$$DP = F_{gross} - (R_c + R_b + R_r)$$
+*(Note: $R_r$ here includes internal mechanical resistance, while $R_c$ and $R_b$ are soil-interaction resistances).*
+If the required locomotion force $F_{loco}$ from the rollers exceeds the available Drawbar Pull from the wheels, the rover gets stuck.
 
 ### 4. Power and Energy Model
 
 The total power requirement dictates the battery and solar panel mass. It is the sum of:
-1. **Locomotion Power**: $P_{loco} = F_{loco} \cdot v$
-2. **Vibration Power**: The kinetic energy imparted to the drum per cycle, scaled by frequency and drivetrain efficiency.
+1. **Locomotion Power**: The power required to overcome both the rollers' soil resistance ($F_{loco}$) and the drive wheels' own internal/soil resistance ($R_{wheel}$):
+   $$P_{loco} = \frac{(F_{loco} + R_{wheel} \cdot N_w) \cdot v}{\eta_{drive}}$$
+2. **Vibration Power**: The kinetic energy imparted to the drum per cycle, scaled by frequency and mechanical efficiency:
    $$P_{vib} = \frac{1}{\eta_{mech}} \left( \frac{(m_e \omega)^2}{2 m_d} \right) f$$
 3. **Hotel Power**: Static power draw from computers, sensors, and thermal systems ($P_{hotel}$).
+
+Total energy for a compaction mission is the time-integral of these power components over all passes required to reach the target density.
 
 ---
 
@@ -115,7 +135,8 @@ The total power requirement dictates the battery and solar panel mass. It is the
 ### Strengths and Purposes
 1. **Comprehensive Trade Space**: The code brilliantly explores the complex non-linear trade-offs in rover design. For example, a heavier rover compacts faster, but requires much more traction, risking getting stuck.
 2. **Dynamic Soil Response**: The simulation correctly models soil as a dynamic material. As density increases pass-by-pass, the soil moduli ($k_c, k_\phi$) are interpolated to represent "stiffening," which realistically reduces sinkage and resistance on subsequent passes.
-3. **Risk Mitigation (Traction)**: The emphasis on extracting the "Required Friction Coefficient ($\mu_{req}$)" and the inclusion of `CompareRoverSensitivity.m` shows a strong engineering focus on the greatest risk to lunar rovers: getting permanently stuck in loose soil.
+3. **High-Fidelity Wheel Modeling**: The addition of grouser enhancement physics ($h_g, n_g$) and unified locomotion power calculations allows for a much more realistic assessment of whether a rover can survive the "fluffy" initial passes of lunar regolith.
+4. **Risk Mitigation (Traction)**: The emphasis on extracting the "Required Friction Coefficient ($\mu_{req}$)" and the inclusion of `CompareRoverSensitivity.m` shows a strong engineering focus on the greatest risk to lunar rovers: getting permanently stuck in loose soil.
 
 ### Limitations and What it Doesn't Consider
 While the systems-level abstraction is excellent for early-stage design, it has several limitations:
