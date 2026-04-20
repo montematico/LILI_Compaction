@@ -110,7 +110,7 @@ figure('Name', 'Design Space Tradeoffs', 'Color', 'w');
 hold on; grid on;
 % Plot all "Safe" candidates as reference
 scatter(M_ROV_GRID(candidates), mu_req_all(candidates), 20, [0.8 0.8 0.8], 'DisplayName', 'Safe Designs','MarkerEdgeColor','b');
-ylim([0,3.5]);
+ylim([0,2.5]);
 % Loop through each comparison index and plot as a star
 colors = lines(length(comparison_indices)); % Get distinctive colors
 for i = 1:length(comparison_indices)
