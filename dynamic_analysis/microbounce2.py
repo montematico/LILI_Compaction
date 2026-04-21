@@ -6,17 +6,20 @@ from matplotlib.widgets import Slider
 
 # --- 1. Physics Constants ---
 g_m = 1.62  # m/s^2 (Lunar gravity)
-m_r_default = 35.0  # kg 
+m_r_default = 65.0  # kg (Total Rover mass)
 W_m_default = m_r_default * g_m  # N 
+
+# Static Weight Distribution (Used ONLY for static ground pressure)
+# 0.30 means 30% of the weight rests on the roller, 70% on the drive wheels
+roller_fraction = 0.30  
 
 # Decoupled Contact Areas
 N_wheels = 6
 A_wheel = 0.0025 # m^2 (Wheel contact patch)
 
-# Roller specifications: 0.5m width, 25cm diameter
+# Roller specifications
 w_drum = 0.5 # m
 d_drum = 0.25 # m
-# Heuristic contact length in soft soil ~ 5cm
 l_contact = 0.05 # m
 A_roller = w_drum * l_contact # 0.025 m^2
 
@@ -24,43 +27,45 @@ A_roller = w_drum * l_contact # 0.025 m^2
 def relative_density(Fc, f=70.0):
     """Compaction depends on absolute force AND frequency (Chen et al. 2021)."""
     D_min, D_max, F_ref = 0.35, 0.95, 200.0
-    # Logistic frequency roll-off (efficiency drops below ~15 Hz)
     eta = 1 / (1 + np.exp(-0.5 * (f - 15)))
     F_eff = Fc * eta
     return D_max - (D_max - D_min) * np.exp(-F_eff / F_ref)
 
 def critical_rebound_limit(Dr, m_r=m_r_default):
-    """Traction loss based on WHEEL contact pressure and quadratic soil stiffness."""
-    W_moon = m_r * g_m
-    P_wheel = W_moon / (N_wheels * A_wheel) 
+    """Traction loss limit based on the wheels' static share of the rigid rover's weight."""
+    W_total = m_r * g_m
+    W_wheels = W_total * (1 - roller_fraction) # Wheels support 70% of the static load
+    P_wheel = W_wheels / (N_wheels * A_wheel) 
     
     ku_loose, ku_dense = 12e6, 60e6 # MN/m^3
     ku = ku_loose + (ku_dense - ku_loose) * ((Dr - 0.35) / (0.95 - 0.35))**2
     return (P_wheel / ku) * 1000 # mm
 
 def micro_bounce(Fc, f, m_r=m_r_default, Dr=0.65):
-    """1-DOF Spring-Mass-Damper model with heuristic lift-off approximation."""
+    """1-DOF Rigid Body Model. The entire rover mass vibrates together."""
     w = 2 * np.pi * f
-    W_moon = m_r * g_m
+    W_total = m_r * g_m
+    
+    # RIGID BODY ASSUMPTION: The entire mass of the rover oscillates
+    m_dynamic = m_r 
     
     # Soil stiffness under the ROLLER
     ku_loose, ku_dense = 12e6, 60e6
     ku = ku_loose + (ku_dense - ku_loose) * ((Dr - 0.35) / (0.95 - 0.35))**2
     k_soil = ku * A_roller
     
-    # Soil Damping (assume zeta = 0.3)
-    c_soil = 2 * 0.3 * np.sqrt(k_soil * m_r)
+    # Soil Damping (using the full rigid mass)
+    c_soil = 2 * 0.3 * np.sqrt(k_soil * m_dynamic)
     
     # Steady-state continuous contact amplitude (Regime A)
-    den = np.sqrt((k_soil - m_r * w**2)**2 + (c_soil * w)**2)
+    den = np.sqrt((k_soil - m_dynamic * w**2)**2 + (c_soil * w)**2)
     Y = Fc / den
     
     # Dynamic transmitted force
     F_d = Y * np.sqrt(k_soil**2 + (c_soil * w)**2)
     
-    # Unilateral Constraint (Lift-off Regime B/C)
-    # If F_d > W_moon, hopping occurs. Approximated by scaling the excess force.
-    X = np.where(F_d <= W_moon, Y, Y + (F_d - W_moon) / (m_r * w**2))
+    # RIGID BODY LIFT-OFF: Dynamic force must exceed the TOTAL rover weight
+    X = np.where(F_d <= W_total, Y, Y + (F_d - W_total) / (m_dynamic * w**2))
     return X * 1000  # Convert to mm
 
 def micro_bounce_from_mer(mer, f, m_r=m_r_default, Dr=0.65):
@@ -113,7 +118,7 @@ plt.tight_layout()
 Fc_ratio = np.linspace(1, 15, 500)
 figC, axC = plt.subplots(figsize=(8, 5))
 
-masses_plotC = [20, 25, 35, 50, 75, 100]
+masses_plotC = [20, 25, 35, 50, 65, 80, 100]
 colors_plotC = plt.cm.viridis(np.linspace(0, 1, len(masses_plotC)))
 f_test = 70 
 
@@ -213,7 +218,7 @@ plt.tight_layout()
 
 figF, axF = plt.subplots(figsize=(10, 7))
 
-masses = [15, 25, 35, 50, 75, 100, 130]
+masses = [15, 25, 35, 50, 65, 80, 100, 130]
 mass_colors = plt.cm.Blues(np.linspace(0.45, 1.0, len(masses)))
 limit_colors = {m: c for m, c in zip(masses, mass_colors)}
 
@@ -223,7 +228,7 @@ for m in masses:
     X_limit = critical_rebound_limit(Dr, m)
     axF.plot(Fc_ratio, X_limit, color=limit_colors[m], linestyle='--', lw=2.5, label=f'Traction Limit ({m}kg)')
 
-frequencies_plotF = np.linspace(10, 50, 8)
+frequencies_plotF = np.linspace(10, 80, 8)
 freq_colors_plotF = plt.cm.RdYlGn_r(np.linspace(0, 1, len(frequencies_plotF)))
 
 for f, c in zip(frequencies_plotF, freq_colors_plotF):
@@ -321,8 +326,8 @@ def draw_heatmap(m):
     axH.contour(F_grid, R_grid, P_grid, levels=[100], colors='k', linewidths=2.0, linestyles='--')
 
     axH.set_xlim(10, 80)
-    axH.set_ylim(1, 15)
-    axH.set_title(f'Interactive Operating Map ({m:.1f} kg Rover)')
+    axH.set_ylim(1, 10)
+    axH.set_title(f'Operating Map ({m:.1f} kg Rover)')
     axH.set_xlabel('Frequency (Hz)')
     axH.set_ylabel('Force-to-Weight Ratio ($F_c / W_{moon}$)')
     axH.grid(True, alpha=0.25)
