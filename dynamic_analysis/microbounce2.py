@@ -6,7 +6,7 @@ from matplotlib.widgets import Slider
 
 # --- 1. Physics Constants ---
 g_m = 1.62  # m/s^2 (Lunar gravity)
-m_r_default = 65.0  # kg (Total Rover mass)
+m_r_default = 75.0  # kg (Total Rover mass)
 W_m_default = m_r_default * g_m  # N 
 
 # Static Weight Distribution (Used ONLY for static ground pressure)
@@ -357,4 +357,165 @@ def update_plot(_):
     figH.canvas.draw_idle()
 
 mass_slider.on_changed(update_plot)
+
+
+
+
+# ============================================================
+# NEW SUPPORT FUNCTIONS FOR GLOBAL HOP BOUNDARY PLOTS
+# ============================================================
+
+def dynamic_response(Fc, f, m_r=m_r_default, Dr=0.65):
+    """
+    1-DOF rigid-body vertical oscillator.
+    Returns:
+      Y_mm   = steady-state displacement amplitude [mm]
+      Fd_N   = transmitted dynamic force amplitude [N]
+      Rhop   = global hop severity = Fd / W_total
+    """
+    w = 2.0 * np.pi * f
+    W_total = m_r * g_m
+
+    # Rigid-body assumption: entire rover oscillates together
+    m_dynamic = m_r
+
+    ku_loose, ku_dense = 12e6, 60e6 # MN/m^3
+    ku = ku_loose + (ku_dense - ku_loose) * ((Dr - 0.35) / (0.95 - 0.35))**2
+    k_soil = ku * A_roller
+    c_soil = 2.0 * 0.3 * np.sqrt(k_soil * m_dynamic)
+
+    den = np.sqrt((k_soil - m_dynamic * w**2)**2 + (c_soil * w)**2)
+    Y = Fc / den   # [m]
+
+    # transmitted dynamic force amplitude
+    Fd = Y * np.sqrt(k_soil**2 + (c_soil * w)**2)
+
+    Rhop = Fd / W_total
+    return Y * 1000.0, Fd, Rhop
+
+def hop_metric(Fc, f, m_r):
+    """
+    Global rigid-body hop severity ratio.
+    Rhop = 1 is the rigid-body hop onset boundary.
+    """
+    Dr = relative_density(Fc, f=f)
+    _, _, Rhop = dynamic_response(Fc, f, m_r=m_r, Dr=Dr)
+    return Rhop
+
+
+# ============================================================
+# NEW PLOT F-HOP:
+# Like Plot F, but markers show GLOBAL HOP ONSET instead of
+# wheel traction limit crossings.
+# ============================================================
+
+figF_hop, axF_hop = plt.subplots(figsize=(10, 7))
+
+Fc_ratio_hop = np.linspace(1, 15, 600)
+frequencies_plotF_hop = np.linspace(10, 80, 8)
+freq_colors_plotF_hop = plt.cm.RdYlGn_r(np.linspace(0, 1, len(frequencies_plotF_hop)))
+
+m_ref_hop = 65.0  # choose a reference rover mass for the plot
+W_ref_hop = m_ref_hop * g_m
+
+for f, c in zip(frequencies_plotF_hop, freq_colors_plotF_hop):
+    Fc_array = Fc_ratio_hop * W_ref_hop
+
+    # bounce amplitude curve
+    Dr_array = relative_density(Fc_array, f=f)
+    B_array = micro_bounce(Fc_array, f, m_r=m_ref_hop, Dr=Dr_array)
+    axF_hop.plot(Fc_ratio_hop, B_array, color=c, lw=2.2, alpha=0.9, label=f'{f:.0f} Hz')
+
+    # hop severity
+    Rhop_array = hop_metric(Fc_array, f, m_ref_hop)
+
+    # mark first hop-onset crossing if it exists
+    if np.any(Rhop_array >= 1.0):
+        idx = np.where(Rhop_array >= 1.0)[0][0]
+        axF_hop.scatter(
+            Fc_ratio_hop[idx], B_array[idx],
+            color=c, edgecolor='k', linewidth=1.5, s=80, zorder=6
+        )
+
+axF_hop.axvline(1.0, color='gray', linestyle='--', linewidth=1.5, alpha=0.7)
+axF_hop.set_xlabel('Force-to-Weight Ratio ($F_c / W_{moon}$)')
+axF_hop.set_ylabel('Micro-Bounce Displacement (mm)')
+axF_hop.set_title(f'Global Hop Onset vs. Micro-Bounce ({m_ref_hop:.0f} kg Rover)\n'
+                  'Markers indicate first hop-regime crossing ($R_{hop}=1$)')
+axF_hop.grid(True, alpha=0.4)
+axF_hop.legend(loc='upper right', fontsize=9, ncol=2)
+plt.tight_layout()
+
+
+# ============================================================
+# NEW PLOT G-HOP:
+# Frequency on x-axis, force-to-weight ratio on left y-axis,
+# centrifugal force on right y-axis.
+# Multiple rover masses shown as hop-limit contour lines.
+# No slider, no heatmap.
+# ============================================================
+
+figG_hop, axG_hop = plt.subplots(figsize=(10, 7))
+# axG_hop_force = axG_hop.twinx()
+
+masses_hop = [15, 25, 35, 50, 65, 80, 100, 130]
+mass_colors_hop = plt.cm.rainbow(np.linspace(0, 1, len(masses_hop)))
+
+freqs_hop = np.linspace(10, 80, 250)
+ratio_search = np.linspace(0, 15.0, 1200)
+
+for m, color in zip(masses_hop, mass_colors_hop):
+    hop_limit_ratio = np.full_like(freqs_hop, np.nan, dtype=float)
+
+    for i, f in enumerate(freqs_hop):
+        Fc_array = ratio_search * m * g_m
+        Rhop_array = hop_metric(Fc_array, f, m)
+
+        # find first ratio where Rhop >= 1
+        if np.any(Rhop_array >= 1.0):
+            idx = np.where(Rhop_array >= 1.0)[0][0]
+            hop_limit_ratio[i] = ratio_search[idx]
+
+    axG_hop.plot(freqs_hop, hop_limit_ratio, color=color, lw=2.5, label=f'{m:.0f} kg')
+
+# Primary axis formatting
+axG_hop.set_xlim(10, 80)
+axG_hop.set_ylim(0, 8)
+axG_hop.set_xlabel('Frequency (Hz)')
+axG_hop.set_ylabel('Force-to-Weight Ratio ($F_c/W_{r}$)')
+axG_hop.set_title('Bounce Regime Boundaries vs. Frequency for Rover Masses')
+axG_hop.grid(True, alpha=0.3)
+axG_hop.legend(loc='upper right', fontsize=9, ncol=2)
+
+# Secondary axis: show centrifugal force corresponding to a chosen reference mass
+# m_ref_axis = 65.0
+# yticks = axG_hop.get_yticks()
+# axG_hop_force.set_ylim(axG_hop.get_ylim())
+# axG_hop_force.set_yticks(yticks)
+# axG_hop_force.set_yticklabels([f'{tick * m_ref_axis * g_m:.0f}' for tick in yticks])
+# axG_hop_force.set_ylabel(f'Equivalent Centrifugal Force for {m_ref_axis:.0f} kg Rover (N)')
+
+plt.tight_layout()
+
+
+
+
+
+
+
+
+
+
+
+
+# plt.show()
+
+
+
+
+
+
+
+
+
 plt.show()
