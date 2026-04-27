@@ -459,14 +459,14 @@ plt.tight_layout()
 figG_hop, axG_hop = plt.subplots(figsize=(10, 7))
 # axG_hop_force = axG_hop.twinx()
 
-masses_hop = [15, 25, 35, 50, 65, 80, 100, 130]
-markers = ['o', 's', '^', 'v', 'D', 'p', '*', 'h']
+masses_hop = [15, 25, 35, 50, 60, 75, 85, 100, 130]
+markers = ['o', 's', '^', 'v', 'D', 'p', '*', 'h', 'X']
 
-norm = mcolors.Normalize(vmin=0.35, vmax=0.95)
-cmap = plt.cm.viridis
+norm = mcolors.Normalize(vmin=0.3, vmax=1)
+cmap = plt.cm.turbo_r.copy()
 
-freqs_hop = np.linspace(10, 80, 250)
-ratio_search = np.linspace(0, 15.0, 1200)
+freqs_hop = np.linspace(10, 80, 800)
+ratio_search = np.linspace(0, 15.0, 8000)
 
 for m, marker in zip(masses_hop, markers):
     hop_limit_ratio = np.full_like(freqs_hop, np.nan, dtype=float)
@@ -503,11 +503,11 @@ for m, marker in zip(masses_hop, markers):
     # Colors for segments, use dr of the first point of each segment
     colors = [cmap(norm(dr)) for dr in dr_vals[:-1]]
 
-    lc = LineCollection(segments, colors=colors, linewidth=2.5)
+    lc = LineCollection(segments, colors=colors, linewidth=2)
     axG_hop.add_collection(lc)
 
     # Add markers at intervals
-    marker_indices = np.arange(0, len(x), 10)  # every 10th point
+    marker_indices = np.arange(20, len(x), 80)
     for idx in marker_indices:
         if idx < len(dr_vals):
             axG_hop.scatter(x[idx], y[idx], color=cmap(norm(dr_vals[idx])), marker=marker, s=50, edgecolor='black', linewidth=0.5, zorder=5)
@@ -516,7 +516,7 @@ for m, marker in zip(masses_hop, markers):
 for m, marker in zip(masses_hop, markers):
     axG_hop.plot([], [], marker=marker, color='black', linestyle='none', markersize=8, label=f'{m:.0f} kg')
 
-axG_hop.legend(loc='upper right', fontsize=9, ncol=2)
+axG_hop.legend(loc='upper left', fontsize=9, ncol=2)
 
 # Primary axis formatting
 axG_hop.set_xlim(10, 80)
