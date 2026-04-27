@@ -2,21 +2,25 @@ import numpy as np
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
 import matplotlib.colors as mcolors
+from matplotlib.collections import LineCollection
 from matplotlib.widgets import Slider
 
 # --- 1. Physics Constants ---
 g_m = 1.62  # m/s^2 (Lunar gravity)
-m_r_default = 35.0  # kg 
+m_r_default = 75.0  # kg (Total Rover mass)
 W_m_default = m_r_default * g_m  # N 
+
+# Static Weight Distribution (Used ONLY for static ground pressure)
+# 0.30 means 30% of the weight rests on the roller, 70% on the drive wheels
+roller_fraction = 0.30  
 
 # Decoupled Contact Areas
 N_wheels = 6
 A_wheel = 0.0025 # m^2 (Wheel contact patch)
 
-# Roller specifications: 0.5m width, 25cm diameter
+# Roller specifications
 w_drum = 0.5 # m
 d_drum = 0.25 # m
-# Heuristic contact length in soft soil ~ 5cm
 l_contact = 0.05 # m
 A_roller = w_drum * l_contact # 0.025 m^2
 
@@ -24,43 +28,45 @@ A_roller = w_drum * l_contact # 0.025 m^2
 def relative_density(Fc, f=70.0):
     """Compaction depends on absolute force AND frequency (Chen et al. 2021)."""
     D_min, D_max, F_ref = 0.35, 0.95, 200.0
-    # Logistic frequency roll-off (efficiency drops below ~15 Hz)
     eta = 1 / (1 + np.exp(-0.5 * (f - 15)))
     F_eff = Fc * eta
     return D_max - (D_max - D_min) * np.exp(-F_eff / F_ref)
 
 def critical_rebound_limit(Dr, m_r=m_r_default):
-    """Traction loss based on WHEEL contact pressure and quadratic soil stiffness."""
-    W_moon = m_r * g_m
-    P_wheel = W_moon / (N_wheels * A_wheel) 
+    """Traction loss limit based on the wheels' static share of the rigid rover's weight."""
+    W_total = m_r * g_m
+    W_wheels = W_total * (1 - roller_fraction) # Wheels support 70% of the static load
+    P_wheel = W_wheels / (N_wheels * A_wheel) 
     
     ku_loose, ku_dense = 12e6, 60e6 # MN/m^3
     ku = ku_loose + (ku_dense - ku_loose) * ((Dr - 0.35) / (0.95 - 0.35))**2
     return (P_wheel / ku) * 1000 # mm
 
 def micro_bounce(Fc, f, m_r=m_r_default, Dr=0.65):
-    """1-DOF Spring-Mass-Damper model with heuristic lift-off approximation."""
+    """1-DOF Rigid Body Model. The entire rover mass vibrates together."""
     w = 2 * np.pi * f
-    W_moon = m_r * g_m
+    W_total = m_r * g_m
+    
+    # RIGID BODY ASSUMPTION: The entire mass of the rover oscillates
+    m_dynamic = m_r 
     
     # Soil stiffness under the ROLLER
     ku_loose, ku_dense = 12e6, 60e6
     ku = ku_loose + (ku_dense - ku_loose) * ((Dr - 0.35) / (0.95 - 0.35))**2
     k_soil = ku * A_roller
     
-    # Soil Damping (assume zeta = 0.3)
-    c_soil = 2 * 0.3 * np.sqrt(k_soil * m_r)
+    # Soil Damping (using the full rigid mass)
+    c_soil = 2 * 0.3 * np.sqrt(k_soil * m_dynamic)
     
     # Steady-state continuous contact amplitude (Regime A)
-    den = np.sqrt((k_soil - m_r * w**2)**2 + (c_soil * w)**2)
+    den = np.sqrt((k_soil - m_dynamic * w**2)**2 + (c_soil * w)**2)
     Y = Fc / den
     
     # Dynamic transmitted force
     F_d = Y * np.sqrt(k_soil**2 + (c_soil * w)**2)
     
-    # Unilateral Constraint (Lift-off Regime B/C)
-    # If F_d > W_moon, hopping occurs. Approximated by scaling the excess force.
-    X = np.where(F_d <= W_moon, Y, Y + (F_d - W_moon) / (m_r * w**2))
+    # RIGID BODY LIFT-OFF: Dynamic force must exceed the TOTAL rover weight
+    X = np.where(F_d <= W_total, Y, Y + (F_d - W_total) / (m_dynamic * w**2))
     return X * 1000  # Convert to mm
 
 def micro_bounce_from_mer(mer, f, m_r=m_r_default, Dr=0.65):
@@ -73,7 +79,7 @@ def micro_bounce_from_mer(mer, f, m_r=m_r_default, Dr=0.65):
 mer_arr = np.linspace(0.001, 0.025, 500)
 figA, axA = plt.subplots(figsize=(10, 6))
 
-frequencies_plotA = np.linspace(10, 50, 8)
+frequencies_plotA = np.linspace(10, 80, 8)
 colors_plotA = plt.cm.RdYlGn_r(np.linspace(0, 1, len(frequencies_plotA)))
 
 for freq, color in zip(frequencies_plotA, colors_plotA):
@@ -94,7 +100,7 @@ plt.tight_layout()
 Fc_abs = np.linspace(0, 500, 500)
 figB, axB = plt.subplots(figsize=(8, 5))
 
-frequencies_plotB = np.linspace(10, 50, 8)
+frequencies_plotB = np.linspace(30, 80, 10)
 colors_plotB = plt.cm.RdYlGn_r(np.linspace(0, 1, len(frequencies_plotB)))
 
 for freq, color in zip(frequencies_plotB, colors_plotB):
@@ -113,7 +119,7 @@ plt.tight_layout()
 Fc_ratio = np.linspace(1, 15, 500)
 figC, axC = plt.subplots(figsize=(8, 5))
 
-masses_plotC = [15, 25, 35, 50, 75, 100]
+masses_plotC = [20, 25, 35, 50, 65, 80, 100]
 colors_plotC = plt.cm.viridis(np.linspace(0, 1, len(masses_plotC)))
 f_test = 70 
 
@@ -213,7 +219,7 @@ plt.tight_layout()
 
 figF, axF = plt.subplots(figsize=(10, 7))
 
-masses = [15, 25, 35, 50, 75, 100, 130]
+masses = [15, 25, 35, 50, 65, 80, 100, 130]
 mass_colors = plt.cm.Blues(np.linspace(0.45, 1.0, len(masses)))
 limit_colors = {m: c for m, c in zip(masses, mass_colors)}
 
@@ -223,7 +229,7 @@ for m in masses:
     X_limit = critical_rebound_limit(Dr, m)
     axF.plot(Fc_ratio, X_limit, color=limit_colors[m], linestyle='--', lw=2.5, label=f'Traction Limit ({m}kg)')
 
-frequencies_plotF = np.linspace(10, 50, 8)
+frequencies_plotF = np.linspace(10, 80, 8)
 freq_colors_plotF = plt.cm.RdYlGn_r(np.linspace(0, 1, len(frequencies_plotF)))
 
 for f, c in zip(frequencies_plotF, freq_colors_plotF):
@@ -288,7 +294,7 @@ figH, axH = plt.subplots(figsize=(10, 7))
 figH.subplots_adjust(left=0.10, right=0.84, bottom=0.22, top=0.93)
 axH_force = axH.twinx()
 
-frequencies_grid = np.linspace(10, 50, 100)
+frequencies_grid = np.linspace(10, 80, 100)
 ratios_grid = np.linspace(1, 15, 100)
 F_grid, R_grid = np.meshgrid(frequencies_grid, ratios_grid)
 
@@ -320,9 +326,9 @@ def draw_heatmap(m):
     contour = axH.contourf(F_grid, R_grid, P_grid, levels=50, cmap=cmapH, norm=normH)
     axH.contour(F_grid, R_grid, P_grid, levels=[100], colors='k', linewidths=2.0, linestyles='--')
 
-    axH.set_xlim(10, 50)
-    axH.set_ylim(1, 15)
-    axH.set_title(f'Interactive Operating Map ({m:.1f} kg Rover)')
+    axH.set_xlim(10, 80)
+    axH.set_ylim(1, 10)
+    axH.set_title(f'Operating Map ({m:.1f} kg Rover)')
     axH.set_xlabel('Frequency (Hz)')
     axH.set_ylabel('Force-to-Weight Ratio ($F_c / W_{moon}$)')
     axH.grid(True, alpha=0.25)
@@ -330,10 +336,10 @@ def draw_heatmap(m):
     update_force_axis(m)
     return contour
 
-initial_mass = 35.0
+initial_mass = 65.0
 contourH = draw_heatmap(initial_mass)
 # Place colorbar in a dedicated axis to keep it fully outside the plot area.
-caxH = figH.add_axes([0.87, 0.22, 0.02, 0.71])
+caxH = figH.add_axes([0.91, 0.22, 0.02, 0.71])
 cbarH = figH.colorbar(contourH, cax=caxH, label='Percent of Limit (%)')
 cbarH.ax.axhline(100, color='k', lw=2, linestyle='--')
 
@@ -352,4 +358,208 @@ def update_plot(_):
     figH.canvas.draw_idle()
 
 mass_slider.on_changed(update_plot)
+
+
+
+
+# ============================================================
+# NEW SUPPORT FUNCTIONS FOR GLOBAL HOP BOUNDARY PLOTS
+# ============================================================
+
+def dynamic_response(Fc, f, m_r=m_r_default, Dr=0.65):
+    """
+    1-DOF rigid-body vertical oscillator.
+    Returns:
+      Y_mm   = steady-state displacement amplitude [mm]
+      Fd_N   = transmitted dynamic force amplitude [N]
+      Rhop   = global hop severity = Fd / W_total
+    """
+    w = 2.0 * np.pi * f
+    W_total = m_r * g_m
+
+    # Rigid-body assumption: entire rover oscillates together
+    m_dynamic = m_r
+
+    ku_loose, ku_dense = 12e6, 60e6 # MN/m^3
+    ku = ku_loose + (ku_dense - ku_loose) * ((Dr - 0.35) / (0.95 - 0.35))**2
+    k_soil = ku * A_roller
+    c_soil = 2.0 * 0.3 * np.sqrt(k_soil * m_dynamic)
+
+    den = np.sqrt((k_soil - m_dynamic * w**2)**2 + (c_soil * w)**2)
+    Y = Fc / den   # [m]
+
+    # transmitted dynamic force amplitude
+    Fd = Y * np.sqrt(k_soil**2 + (c_soil * w)**2)
+
+    Rhop = Fd / W_total
+    return Y * 1000.0, Fd, Rhop
+
+def hop_metric(Fc, f, m_r):
+    """
+    Global rigid-body hop severity ratio.
+    Rhop = 1 is the rigid-body hop onset boundary.
+    """
+    Dr = relative_density(Fc, f=f)
+    _, _, Rhop = dynamic_response(Fc, f, m_r=m_r, Dr=Dr)
+    return Rhop
+
+
+# ============================================================
+# NEW PLOT F-HOP:
+# Like Plot F, but markers show GLOBAL HOP ONSET instead of
+# wheel traction limit crossings.
+# ============================================================
+
+figF_hop, axF_hop = plt.subplots(figsize=(10, 7))
+
+Fc_ratio_hop = np.linspace(1, 15, 600)
+frequencies_plotF_hop = np.linspace(10, 80, 8)
+freq_colors_plotF_hop = plt.cm.RdYlGn_r(np.linspace(0, 1, len(frequencies_plotF_hop)))
+
+m_ref_hop = 65.0  # choose a reference rover mass for the plot
+W_ref_hop = m_ref_hop * g_m
+
+for f, c in zip(frequencies_plotF_hop, freq_colors_plotF_hop):
+    Fc_array = Fc_ratio_hop * W_ref_hop
+
+    # bounce amplitude curve
+    Dr_array = relative_density(Fc_array, f=f)
+    B_array = micro_bounce(Fc_array, f, m_r=m_ref_hop, Dr=Dr_array)
+    axF_hop.plot(Fc_ratio_hop, B_array, color=c, lw=2.2, alpha=0.9, label=f'{f:.0f} Hz')
+
+    # hop severity
+    Rhop_array = hop_metric(Fc_array, f, m_ref_hop)
+
+    # mark first hop-onset crossing if it exists
+    if np.any(Rhop_array >= 1.0):
+        idx = np.where(Rhop_array >= 1.0)[0][0]
+        axF_hop.scatter(
+            Fc_ratio_hop[idx], B_array[idx],
+            color=c, edgecolor='k', linewidth=1.5, s=80, zorder=6
+        )
+
+axF_hop.axvline(1.0, color='gray', linestyle='--', linewidth=1.5, alpha=0.7)
+axF_hop.set_xlabel('Force-to-Weight Ratio ($F_c / W_{moon}$)')
+axF_hop.set_ylabel('Micro-Bounce Displacement (mm)')
+axF_hop.set_title(f'Global Hop Onset vs. Micro-Bounce ({m_ref_hop:.0f} kg Rover)\n'
+                  'Markers indicate first hop-regime crossing ($R_{hop}=1$)')
+axF_hop.grid(True, alpha=0.4)
+axF_hop.legend(loc='upper right', fontsize=9, ncol=2)
+plt.tight_layout()
+
+
+# ============================================================
+# NEW PLOT G-HOP:
+# Frequency on x-axis, force-to-weight ratio on left y-axis,
+# centrifugal force on right y-axis.
+# Multiple rover masses shown as hop-limit contour lines.
+# No slider, no heatmap.
+# ============================================================
+
+figG_hop, axG_hop = plt.subplots(figsize=(10, 7))
+# axG_hop_force = axG_hop.twinx()
+
+masses_hop = [15, 25, 35, 50, 60, 75, 85, 100, 130]
+markers = ['o', 's', '^', 'v', 'D', 'p', '*', 'h', 'X']
+
+norm = mcolors.Normalize(vmin=0.3, vmax=1)
+cmap = plt.cm.turbo_r.copy()
+
+freqs_hop = np.linspace(10, 80, 800)
+ratio_search = np.linspace(0, 15.0, 8000)
+
+for m, marker in zip(masses_hop, markers):
+    hop_limit_ratio = np.full_like(freqs_hop, np.nan, dtype=float)
+
+    for i, f in enumerate(freqs_hop):
+        Fc_array = ratio_search * m * g_m
+        Rhop_array = hop_metric(Fc_array, f, m)
+
+        # find first ratio where Rhop >= 1
+        if np.any(Rhop_array >= 1.0):
+            idx = np.where(Rhop_array >= 1.0)[0][0]
+            hop_limit_ratio[i] = ratio_search[idx]
+
+    # Create LineCollection with gradient colors
+    valid_idx = ~np.isnan(hop_limit_ratio)
+    x = freqs_hop[valid_idx]
+    y = hop_limit_ratio[valid_idx]
+    if len(x) < 2:
+        continue
+
+    # Compute Dr for each point
+    dr_vals = []
+    for i in range(len(x)):
+        f = x[i]
+        ratio = y[i]
+        Fc = ratio * m * g_m
+        dr = relative_density(Fc, f)
+        dr_vals.append(dr)
+
+    # Segments
+    points = np.column_stack((x, y))
+    segments = np.array([points[:-1], points[1:]]).transpose(1, 0, 2)
+
+    # Colors for segments, use dr of the first point of each segment
+    colors = [cmap(norm(dr)) for dr in dr_vals[:-1]]
+
+    lc = LineCollection(segments, colors=colors, linewidth=2)
+    axG_hop.add_collection(lc)
+
+    # Add markers at intervals
+    marker_indices = np.arange(20, len(x), 80)
+    for idx in marker_indices:
+        if idx < len(dr_vals):
+            axG_hop.scatter(x[idx], y[idx], color=cmap(norm(dr_vals[idx])), marker=marker, s=50, edgecolor='black', linewidth=0.5, zorder=5)
+
+# For legend
+for m, marker in zip(masses_hop, markers):
+    axG_hop.plot([], [], marker=marker, color='black', linestyle='none', markersize=8, label=f'{m:.0f} kg')
+
+axG_hop.legend(loc='upper left', fontsize=9, ncol=2)
+
+# Primary axis formatting
+axG_hop.set_xlim(10, 80)
+axG_hop.set_ylim(0, 8)
+axG_hop.set_xlabel('Frequency (Hz)')
+axG_hop.set_ylabel('Force-to-Weight Ratio ($F_c/W_{r}$)')
+axG_hop.set_title('Bounce Regime Boundaries vs. Frequency for Rover Masses')
+axG_hop.grid(True, alpha=0.3)
+
+# Add colorbar
+sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
+sm.set_array([])
+cbar = figG_hop.colorbar(sm, ax=axG_hop, label='Relative Density after 1 Pass')
+
+# Secondary axis: show centrifugal force corresponding to a chosen reference mass
+# m_ref_axis = 65.0
+# yticks = axG_hop.get_yticks()
+# axG_hop_force.set_ylim(axG_hop.get_ylim())
+# axG_hop_force.set_yticks(yticks)
+# axG_hop_force.set_yticklabels([f'{tick * m_ref_axis * g_m:.0f}' for tick in yticks])
+# axG_hop_force.set_ylabel(f'Equivalent Centrifugal Force for {m_ref_axis:.0f} kg Rover (N)')
+
+plt.tight_layout()
+
+
+
+
+
+
+
+
+
+
+
+
+# plt.show()
+
+
+
+
+
+
+
+
+
 plt.show()
