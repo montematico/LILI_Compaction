@@ -2,6 +2,7 @@ import numpy as np
 import matplotlib.pyplot as plt
 from mpl_toolkits.mplot3d import Axes3D
 import matplotlib.colors as mcolors
+from matplotlib.collections import LineCollection
 from matplotlib.widgets import Slider
 
 # --- 1. Physics Constants ---
@@ -459,12 +460,15 @@ figG_hop, axG_hop = plt.subplots(figsize=(10, 7))
 # axG_hop_force = axG_hop.twinx()
 
 masses_hop = [15, 25, 35, 50, 65, 80, 100, 130]
-mass_colors_hop = plt.cm.rainbow(np.linspace(0, 1, len(masses_hop)))
+markers = ['o', 's', '^', 'v', 'D', 'p', '*', 'h']
+
+norm = mcolors.Normalize(vmin=0.35, vmax=0.95)
+cmap = plt.cm.viridis
 
 freqs_hop = np.linspace(10, 80, 250)
 ratio_search = np.linspace(0, 15.0, 1200)
 
-for m, color in zip(masses_hop, mass_colors_hop):
+for m, marker in zip(masses_hop, markers):
     hop_limit_ratio = np.full_like(freqs_hop, np.nan, dtype=float)
 
     for i, f in enumerate(freqs_hop):
@@ -476,7 +480,43 @@ for m, color in zip(masses_hop, mass_colors_hop):
             idx = np.where(Rhop_array >= 1.0)[0][0]
             hop_limit_ratio[i] = ratio_search[idx]
 
-    axG_hop.plot(freqs_hop, hop_limit_ratio, color=color, lw=2.5, label=f'{m:.0f} kg')
+    # Create LineCollection with gradient colors
+    valid_idx = ~np.isnan(hop_limit_ratio)
+    x = freqs_hop[valid_idx]
+    y = hop_limit_ratio[valid_idx]
+    if len(x) < 2:
+        continue
+
+    # Compute Dr for each point
+    dr_vals = []
+    for i in range(len(x)):
+        f = x[i]
+        ratio = y[i]
+        Fc = ratio * m * g_m
+        dr = relative_density(Fc, f)
+        dr_vals.append(dr)
+
+    # Segments
+    points = np.column_stack((x, y))
+    segments = np.array([points[:-1], points[1:]]).transpose(1, 0, 2)
+
+    # Colors for segments, use dr of the first point of each segment
+    colors = [cmap(norm(dr)) for dr in dr_vals[:-1]]
+
+    lc = LineCollection(segments, colors=colors, linewidth=2.5)
+    axG_hop.add_collection(lc)
+
+    # Add markers at intervals
+    marker_indices = np.arange(0, len(x), 10)  # every 10th point
+    for idx in marker_indices:
+        if idx < len(dr_vals):
+            axG_hop.scatter(x[idx], y[idx], color=cmap(norm(dr_vals[idx])), marker=marker, s=50, edgecolor='black', linewidth=0.5, zorder=5)
+
+# For legend
+for m, marker in zip(masses_hop, markers):
+    axG_hop.plot([], [], marker=marker, color='black', linestyle='none', markersize=8, label=f'{m:.0f} kg')
+
+axG_hop.legend(loc='upper right', fontsize=9, ncol=2)
 
 # Primary axis formatting
 axG_hop.set_xlim(10, 80)
@@ -485,7 +525,11 @@ axG_hop.set_xlabel('Frequency (Hz)')
 axG_hop.set_ylabel('Force-to-Weight Ratio ($F_c/W_{r}$)')
 axG_hop.set_title('Bounce Regime Boundaries vs. Frequency for Rover Masses')
 axG_hop.grid(True, alpha=0.3)
-axG_hop.legend(loc='upper right', fontsize=9, ncol=2)
+
+# Add colorbar
+sm = plt.cm.ScalarMappable(cmap=cmap, norm=norm)
+sm.set_array([])
+cbar = figG_hop.colorbar(sm, ax=axG_hop, label='Relative Density after 1 Pass')
 
 # Secondary axis: show centrifugal force corresponding to a chosen reference mass
 # m_ref_axis = 65.0
