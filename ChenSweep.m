@@ -276,6 +276,17 @@ function [rho_final, total_avg_power_W, total_passes, total_cycles, lc_avg_dynam
     %     return;
     % end
     
+    % --- Dynamic Feasibility Constants (from microbounce2.py) ---
+    ku_loose = 12e6; ku_dense = 60e6;
+    A_wheel_patch = 0.0025; % m^2
+    l_contact_dynamic = 0.05; % m
+    A_roller_dynamic = b_roller * l_contact_dynamic;
+    zeta_dynamic = 0.3;
+    
+    % Frequency efficiency roll-off (from microbounce2.py)
+    eta_freq = 1 / (1 + exp(-0.5 * (f - 15)));
+    F0_eff = F0 * eta_freq;
+    
     rho_f = rho_min_lunar + target_relative_density * (rho_max_lunar - rho_min_lunar);
     rho = rho_i; 
     
@@ -287,7 +298,7 @@ function [rho_final, total_avg_power_W, total_passes, total_cycles, lc_avg_dynam
     
     % Updated for new mass variables
     omega_sq_mdrum_half = (m_drum * omega^2) / 2;
-    term2_fixed_part = (F0^2 * m_drum^2) / (m_total_wheel^2);
+    term2_fixed_part = (F0_eff^2 * m_drum^2) / (m_total_wheel^2);
     % ----------------------------------------------
 
     % Loop trackers
@@ -346,6 +357,36 @@ function [rho_final, total_avg_power_W, total_passes, total_cycles, lc_avg_dynam
         current_pass = current_pass + 1;
         rho_before_pass = rho; % Track density before the pass starts
         
+        % Dynamic Feasibility Check
+        frac_dyn = max(0, min(1, (rho - rho_min_lunar) / (rho_max_lunar - rho_min_lunar)));
+        % Soil stiffness based on relative density (quadratic mapping)
+        ku = ku_loose + (ku_dense - ku_loose) * frac_dyn^2;
+        k_soil_dyn = ku * A_roller_dynamic;
+        c_soil_dyn = 2 * zeta_dynamic * sqrt(k_soil_dyn * m_drum);
+        
+        % Steady-state amplitude
+        den_dyn = sqrt((k_soil_dyn - m_drum * omega^2)^2 + (c_soil_dyn * omega)^2);
+        Y_dyn = F0 / den_dyn;
+        
+        % Transmitted Force
+        F_trans = Y_dyn * sqrt(k_soil_dyn^2 + (c_soil_dyn * omega)^2);
+        
+        % Hopping displacement (mm)
+        if F_trans <= W_roller
+            X_bounce = Y_dyn * 1000;
+        else
+            X_bounce = (Y_dyn + (F_trans - W_roller) / (m_drum * omega^2)) * 1000;
+        end
+        
+        % Traction Limit (mm)
+        P_wheel = W_drive_wheel / A_wheel_patch;
+        X_limit = (P_wheel / ku) * 1000;
+        
+        if X_bounce > X_limit
+            is_valid = false;
+            break;
+        end
+
         % 1. Interpolate Soil Moduli based on Relative Density
         frac = max(0, min(1, (rho - rho_min_lunar) / (rho_max_lunar - rho_min_lunar)));
         kc_dyn = SOIL.kc + frac * (SOIL.kc_dense - SOIL.kc);
