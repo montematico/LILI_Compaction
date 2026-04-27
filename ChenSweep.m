@@ -296,7 +296,7 @@ function [rho_final, total_avg_power_W, total_passes, total_cycles, lc_avg_dynam
     E_mult = 6.498e-4; % Combined 6.498e-10 * 1e6
     nu_term = 1 - nu;
     
-    % Updated for new mass variables and effective force
+    % Updated for new mass variables
     omega_sq_mdrum_half = (m_drum * omega^2) / 2;
     term2_fixed_part = (F0_eff^2 * m_drum^2) / (m_total_wheel^2);
     % ----------------------------------------------
@@ -311,7 +311,7 @@ function [rho_final, total_avg_power_W, total_passes, total_cycles, lc_avg_dynam
     is_valid = true;
     total_energy_Joule = 0; % Track cumulative work done
 
-    % Power Model (Vibration) - Full force used for power calculation
+    % Power Model (Vibration)
     KE_peak = (m_eccentric * omega)^2 / (2 * m_drum);
     req_vib_power = (KE_peak * f) / eta_mech;
 
@@ -357,7 +357,7 @@ function [rho_final, total_avg_power_W, total_passes, total_cycles, lc_avg_dynam
         current_pass = current_pass + 1;
         rho_before_pass = rho; % Track density before the pass starts
         
-        % --- Dynamic Feasibility Check (Integration of microbounce2.py) ---
+        % Dynamic Feasibility Check
         frac_dyn = max(0, min(1, (rho - rho_min_lunar) / (rho_max_lunar - rho_min_lunar)));
         % Soil stiffness based on relative density (quadratic mapping)
         ku = ku_loose + (ku_dense - ku_loose) * frac_dyn^2;
@@ -386,7 +386,6 @@ function [rho_final, total_avg_power_W, total_passes, total_cycles, lc_avg_dynam
             is_valid = false;
             break;
         end
-        % -----------------------------------------------------------------
 
         % 1. Interpolate Soil Moduli based on Relative Density
         frac = max(0, min(1, (rho - rho_min_lunar) / (rho_max_lunar - rho_min_lunar)));
