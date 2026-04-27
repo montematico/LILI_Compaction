@@ -50,10 +50,10 @@ Y_data = Time_results(valid_idx);
 P_X = M_ROV_GRID(pareto_idx);
 P_Y = Time_results(pareto_idx);
 
-% Figure 1: Mass Ratio
-figure('Name', 'Trade Space: Mass Ratio');
-plot_contour(X_data, Y_data, M_RATIO_GRID(valid_idx), M_MESH, T_MESH, ...
-    'Total Mass vs. Mission Time (Mass Ratio)', 'Mass Ratio', flipud(parula), show_pareto, pareto_idx, P_X, P_Y);
+% Figure 1: Unified Fraction (Roller Mass Fraction)
+figure('Name', 'Trade Space: Unified Fraction');
+plot_contour(X_data, Y_data, UNIFIED_FRAC_GRID(valid_idx), M_MESH, T_MESH, ...
+    'Total Mass vs. Mission Time (Unified Fraction)', 'Unified Fraction', flipud(parula), show_pareto, pareto_idx, P_X, P_Y);
 
 % Figure 2: Traction Requirements (Force)
 figure('Name', 'Traction Requirements (Force)');
@@ -74,6 +74,92 @@ plot_contour(X_data, Y_data, Specific_Energy(valid_idx), M_MESH, T_MESH, ...
 figure('Name', 'Trade Space: Total Energy');
 plot_contour(X_data, Y_data, Energy_results(valid_idx), M_MESH, T_MESH, ...
     'Total Mass vs. Mission Time (Energy)', 'Total Energy (kWh)', 'turbo', show_pareto, pareto_idx, P_X, P_Y);
+
+% Figure 7: Normalized Traction Margin - NEW
+% Calculate Dynamic Limit (MU_max) for valid indices
+h_g = 0.008; n_g = 18; slip_target = 0.20; 
+if ~exist('SOIL','var'); SOIL.K = 0.02; end
+MU_max_valid = zeros(size(valid_idx));
+for i = 1:length(valid_idx)
+    idx = valid_idx(i);
+    W_drive_total = M_ROV_GRID(idx) * g_moon_val - (M_ROV_GRID(idx) * g_moon_val * UNIFIED_FRAC_GRID(idx));
+    W_wheel = W_drive_total / DRIVE.Nw;
+    perf = calculate_wheel_performance(W_wheel, D_WHEEL_GRID(idx), DRIVE.b, h_g, n_g, slip_target, v_sim, SOIL);
+    MU_max_valid(i) = perf.MU_max;
+end
+Traction_Margin = MU_max_valid - mu_req_all;
+Norm_Margin = (Traction_Margin - min(Traction_Margin)) ./ (max(Traction_Margin) - min(Traction_Margin));
+
+figure('Name', 'Trade Space: Traction Margin');
+plot_contour(X_data, Y_data, Norm_Margin, M_MESH, T_MESH, ...
+    'Total Mass vs. Mission Time (Normalized Traction Margin)', 'Normalized Margin (0-1)', 'parula', show_pareto, pareto_idx, P_X, P_Y);
+
+% --- New: 9x9 Performance Correlation Matrix ---
+% Variables: Mass, Wheel Diameter, Wheel Width, Frequency, Mass Ratio, Time, Max Traction Force, Total Energy, Margin
+M_vals  = M_ROV_GRID(valid_idx);
+DW_vals = D_WHEEL_GRID(valid_idx);
+BW_vals = B_WHEEL_GRID(valid_idx);
+F_vals  = F_GRID(valid_idx);
+MR_vals = UNIFIED_FRAC_GRID(valid_idx);
+T_vals  = Time_results(valid_idx);
+TF_vals = Max_Traction_results(valid_idx);
+E_vals  = Energy_results(valid_idx);
+N_vals  = Norm_Margin(:);
+
+% Consolidated matrix (9 columns)
+vars_matrix = [M_vals(:), DW_vals(:), BW_vals(:), F_vals(:), MR_vals(:), T_vals(:), TF_vals(:), E_vals(:), N_vals];
+var_labels = {'Mass (kg)', 'Whl D (m)', 'Whl B (m)', 'Freq (hz)', 'Mass Ratio (%)', 'Time (hr)', 'Trac. (N)', 'Energy (kWh)', 'Traction Margin (%)'};
+
+figure('Name', '9x9 Performance Matrix', 'Units', 'normalized', 'Position', [0.1 0.1 0.8 0.8], 'Color', 'w');
+[S, AX, BigAx, H, HAx] = plotmatrix(vars_matrix);
+
+% Remove all histograms explicitly
+for i = 1:length(HAx)
+    set(HAx(i), 'Visible', 'off');
+    delete(get(HAx(i), 'Children'));
+end
+
+num_vars = length(var_labels);
+for i = 1:num_vars
+    for j = 1:num_vars
+        if i >= j
+            % Remove lower triangular subplots and redundant diagonal axes
+            set(AX(i,j), 'Visible', 'off');
+            delete(get(AX(i,j), 'Children'));
+        else
+            % Enable grid and numeric scales for all visible scatter plots
+            grid(AX(i,j), 'on');
+            set(AX(i,j), 'Box', 'on', 'Visible', 'on');
+            set(S(i,j), 'MarkerSize', 8); % Slightly increase marker size
+            
+            % Axis numbers (ticks) only once per row/column (on the staircase)
+            if j == i + 1
+                set(AX(i,j), 'YTickLabelMode', 'auto');
+            else
+                set(AX(i,j), 'YTickLabel', '');
+            end
+            
+            if i == j - 1
+                set(AX(i,j), 'XTickLabelMode', 'auto');
+                xtickangle(AX(i,j), 45); % Rotate x-tick labels to prevent overlap
+            else
+                set(AX(i,j), 'XTickLabel', '');
+            end
+        end
+    end
+end
+
+% Label placement per request: Move axis labels to the far left/bottom edges
+for i = 1:num_vars
+    % Y-labels on the far left (column 1)
+    ylab = get(AX(i, 1), 'YLabel');
+    set(ylab, 'String', var_labels{i}, 'FontWeight', 'bold', 'FontSize', 9, 'Visible', 'on');
+    
+    % X-labels on the far bottom (row num_vars)
+    xlab = get(AX(num_vars, i), 'XLabel');
+    set(xlab, 'String', var_labels{i}, 'FontWeight', 'bold', 'FontSize', 9, 'Visible', 'on');
+end
+title(BigAx, 'Performance Sensitivity & Correlation Matrix');
 
 end
 

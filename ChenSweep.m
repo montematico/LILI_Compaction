@@ -57,15 +57,15 @@ DRIVE.slip = 0.20;                % slip ratio [0 to 1]
 
 %% 2. Define the 7D Sweep Grid
 %Defines the sweep-space
-f_range = linspace(30, 80, 3); %hz
+f_range = linspace(30, 90, 5); %hz
 m_eccentric_range = logspace(-4, log10(0.5e-2), 4); %kg-m
-m_rov_range = linspace(20, 100, 10); %kg
-mass_ratio_range = linspace(0.2, 0.8, 5); %
-R_roller_range = linspace(0.07, 0.50, 5); %
-roller_fraction_range = linspace(0.2, 0.6, 4); %distribution of weight btwn rollers and wheels
-D_wheel_range = linspace(0.1, 0.6, 4); %m
+m_rov_range = linspace(20, 100, 10); %kg m_rover
+R_roller_range = linspace(0.07, 0.50, 5); % Roller radius
+unified_fraction_range = linspace(0.15, 0.85, 10); %distribution of weight btwn rollers and wheels
+D_wheel_range = linspace(0.2, 0.6, 5); %m
+B_wheel_range = linspace(0.08, 0.4, 8); %m
 
-[F_GRID, M_ECC_GRID, M_ROV_GRID, M_RATIO_GRID, R_ROLLER_GRID, ROL_FRAC_GRID, D_WHEEL_GRID] = ndgrid(f_range, m_eccentric_range, m_rov_range, mass_ratio_range, R_roller_range, roller_fraction_range, D_wheel_range);
+[F_GRID, M_ECC_GRID, M_ROV_GRID, R_ROLLER_GRID, UNIFIED_FRAC_GRID, D_WHEEL_GRID, B_WHEEL_GRID] = ndgrid(f_range, m_eccentric_range, m_rov_range, R_roller_range, unified_fraction_range, D_wheel_range, B_wheel_range);
 
 % Initialize results arrays
 Rho_results = nan(size(F_GRID));
@@ -82,10 +82,10 @@ if dry_run
     F_GRID = F_GRID(1:min(10, end));
     M_ECC_GRID = M_ECC_GRID(1:min(10, end));
     M_ROV_GRID = M_ROV_GRID(1:min(10, end));
-    M_RATIO_GRID = M_RATIO_GRID(1:min(10, end));
     R_ROLLER_GRID = R_ROLLER_GRID(1:min(10, end));
-    ROL_FRAC_GRID = ROL_FRAC_GRID(1:min(10, end));
+    UNIFIED_FRAC_GRID = UNIFIED_FRAC_GRID(1:min(10, end));
     D_WHEEL_GRID = D_WHEEL_GRID(1:min(10, end));
+    B_WHEEL_GRID = B_WHEEL_GRID(1:min(10, end));
     
     % Re-initialize results arrays for sliced grid
     Rho_results = nan(size(F_GRID));
@@ -127,21 +127,21 @@ parfor i = 1:numel(F_GRID)
     f = F_GRID(i);
     m_eccentric = M_ECC_GRID(i);
     m_rov = M_ROV_GRID(i);
-    mass_ratio = M_RATIO_GRID(i);
     R_roller = R_ROLLER_GRID(i);
-    roller_fraction = ROL_FRAC_GRID(i);
+    unified_fraction = UNIFIED_FRAC_GRID(i);
     
     loop_DRIVE = DRIVE;
     loop_DRIVE.D = D_WHEEL_GRID(i);
+    loop_DRIVE.b = B_WHEEL_GRID(i);
     
     % Derived parameters
     D_roller = R_roller * 2;
     b_roller = 0.3; % Fixed width
-    W_roller = (m_rov * g_moon * roller_fraction) / n_rollers;
+    W_roller = (m_rov * g_moon * unified_fraction) / n_rollers;
     
     % Call the simulation function (Updated with battery and hotel power)
     [rho_final, total_avg_power_W, total_passes, total_cycles, lc_avg_dynamic, total_energy_kWh, is_valid, max_F_loco] = ...
-        run_compaction_sim(W_roller, b_roller, D_roller, m_eccentric, f, v_sim, mass_ratio, m_rov, ...
+        run_compaction_sim(W_roller, b_roller, D_roller, m_eccentric, f, v_sim, unified_fraction, m_rov, ...
         target_relative_density, bounce_margin, h_layer, SOIL, eta_mech, nu, rho_min_lunar, rho_max_lunar, rho_i, ...
         Apad, n_rollers, c_f, g_moon, P_hotel, battery_density_Wh_kg, max_battery_fraction, t_work_cycle_h, max_sinkage_ratio, loop_DRIVE);
     
@@ -195,7 +195,7 @@ else
     % Extract valid vectors
     m_rov_vec = M_ROV_GRID(valid_idx);
     energy_vec = Energy_results(valid_idx);
-    mass_ratio_vec = M_RATIO_GRID(valid_idx);
+    unified_frac_vec = UNIFIED_FRAC_GRID(valid_idx);
     f_vec = F_GRID(valid_idx);
 
     % Calculate Required Traction Coefficient
@@ -204,7 +204,7 @@ else
 
     % 5-Objective Matrix: 
     % [Minimize Mass, Minimize Energy, Maximize Ratio, Target 50Hz, Minimize mu_req]
-    objectives = [m_rov_vec, energy_vec, 1./mass_ratio_vec, abs(f_vec - 50), mu_req_vec];
+    objectives = [m_rov_vec, energy_vec, 1./unified_frac_vec, abs(f_vec - 50), mu_req_vec];
 
     % Apply Weights to Objectives
     objectives = objectives .* pareto_weights;    
@@ -231,9 +231,9 @@ else
     pareto_max_traction = Max_Traction_results(pareto_idx);
     pareto_radius = R_ROLLER_GRID(pareto_idx);
     pareto_m_rov = M_ROV_GRID(pareto_idx);
-    pareto_mass_ratios = M_RATIO_GRID(pareto_idx);
-    pareto_rol_frac = ROL_FRAC_GRID(pareto_idx);
+    pareto_unified_frac = UNIFIED_FRAC_GRID(pareto_idx);
     pareto_d_wheel = D_WHEEL_GRID(pareto_idx);
+    pareto_b_wheel = B_WHEEL_GRID(pareto_idx);
 
     % 3. Print Summary Table
     fprintf('\n================ PARETO OPTIMAL SUMMARY (N=%d) ================\n', length(pareto_idx));
@@ -242,10 +242,10 @@ else
     fprintf('%-25s | %-10.2f | %-10.2f | %-10.2f\n', 'Max Traction Force (N)', mean(pareto_max_traction), min(pareto_max_traction), max(pareto_max_traction));
     fprintf('%-25s | %-10.3f | %-10.3f | %-10.3f\n', 'Roller Radius (m)', mean(pareto_radius), min(pareto_radius), max(pareto_radius));
     fprintf('%-25s | %-10.1f | %-10.1f | %-10.1f\n', 'Total Rover Mass (kg)', mean(pareto_m_rov), min(pareto_m_rov), max(pareto_m_rov));
-    fprintf('%-25s | %-10.2f | %-10.2f | %-10.2f\n', 'Mass Ratio', mean(pareto_mass_ratios), min(pareto_mass_ratios), max(pareto_mass_ratios));
+    fprintf('%-25s | %-10.2f | %-10.2f | %-10.2f\n', 'Unified Fraction', mean(pareto_unified_frac), min(pareto_unified_frac), max(pareto_unified_frac));
     fprintf('%-25s | %-10.4f | %-10.4f | %-10.4f\n', 'Gross Area Rate (m^2/s)', mean(gross_area_rates), min(gross_area_rates), max(gross_area_rates));
-    fprintf('%-25s | %-10.2f | %-10.2f | %-10.2f\n', 'Roller Fraction', mean(pareto_rol_frac), min(pareto_rol_frac), max(pareto_rol_frac));
     fprintf('%-25s | %-10.3f | %-10.3f | %-10.3f\n', 'Drive Wheel Diameter (m)', mean(pareto_d_wheel), min(pareto_d_wheel), max(pareto_d_wheel));
+    fprintf('%-25s | %-10.3f | %-10.3f | %-10.3f\n', 'Drive Wheel Width (m)', mean(pareto_b_wheel), min(pareto_b_wheel), max(pareto_b_wheel));
     fprintf('---------------------------------------------------------------\n');
     fprintf('Constant Net Area Rate: %.4f m^2/s\n', net_area_rate);
     fprintf('===============================================================\n\n');
@@ -256,7 +256,7 @@ end
 
 %% Functions (Copied from CompactionChen.m)
 function [rho_final, total_avg_power_W, total_passes, total_cycles, lc_avg_dynamic, total_energy_kWh, is_valid, max_F_loco] = ...
-    run_compaction_sim(W_roller, b_roller, D_roller, m_eccentric, f, v_sim, mass_ratio, m_rov, target_relative_density, bounce_margin, h_layer, SOIL, eta_mech, nu, rho_min_lunar, rho_max_lunar, rho_i, Apad, n_rollers, c_f, g_moon, P_hotel, battery_density_Wh_kg, max_battery_fraction, t_work_cycle_h, max_sinkage_ratio, DRIVE)
+    run_compaction_sim(W_roller, b_roller, D_roller, m_eccentric, f, v_sim, unified_fraction, m_rov, target_relative_density, bounce_margin, h_layer, SOIL, eta_mech, nu, rho_min_lunar, rho_max_lunar, rho_i, Apad, n_rollers, c_f, g_moon, P_hotel, battery_density_Wh_kg, max_battery_fraction, t_work_cycle_h, max_sinkage_ratio, DRIVE)
     
     % Internal Initializations
     max_F_loco = 0;
@@ -264,8 +264,8 @@ function [rho_final, total_avg_power_W, total_passes, total_cycles, lc_avg_dynam
     omega = 2 * pi * f;
     
     % --- Physical Mass Derivations ---
-    m_total_wheel = m_rov / n_rollers;        % Total mass acting on one wheel
-    m_drum = m_total_wheel * mass_ratio;      % Mass of the bouncing steel drum (Chen's mp)
+    m_total_wheel = (m_rov * unified_fraction) / n_rollers;        % Mass acting on one roller
+    m_drum = m_total_wheel;      % The entire mass on the roller acts as the bouncing drum
     
     F0 = m_eccentric * omega^2;
     
